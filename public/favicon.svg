@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Sleeve">
+  <!--
+    Sleeve 站点图标。
+    在 32 基准网格上设计：柱宽 4、间隙 3 —— 缩到 16px 时正好是 2px 与 1.5px，
+    不会糊成一团；柱高 11 / 20 / 14 且垂直居中，读作一段音频波形。
+    几何与设计稿（fileId 730232918361801）的主方案一致，导出后按 8:1 归一到 32 网格。
+    底板用纯色不算渐变：16px 下渐变只会发灰，反而降低可辨识度。
+  -->
+  <rect width="32" height="32" rx="7.5" fill="#5865F2"/>
+  <rect x="7" y="10.5" width="4" height="11" rx="2" fill="#FFFFFF"/>
+  <rect x="14" y="6" width="4" height="20" rx="2" fill="#FFFFFF"/>
+  <rect x="21" y="9" width="4" height="14" rx="2" fill="#FFFFFF"/>
+</svg>
