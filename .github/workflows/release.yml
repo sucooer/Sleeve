@@ -1,0 +1,105 @@
+# 打 SemVer 标签（v1.2.3）后自动发布：
+#   1) GitHub Release —— 说明按 commit 自动生成
+#   2) 多架构 Docker 镜像（linux/amd64 + linux/arm64）同时推 ghcr.io 与 Docker Hub
+# 镜像名跟随 GitHub 仓库名；tag 为 <版本号> 与 latest。
+# 前置：仓库 Settings → Secrets 配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
+name: 发布
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 校验 SemVer 标签
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::标签 $GITHUB_REF_NAME 不是 SemVer（应形如 v1.2.3），已中止发布"
+            exit 1
+          fi
+      - name: 创建 GitHub Release（说明自动生成）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在（重跑场景），跳过创建"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          fi
+
+  docker:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号与镜像名
+        id: prep
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          # ghcr 强制小写；镜像名跟随仓库名：<owner>/<repo> → ghcr.io/owner/repo、Docker Hub <用户名>/repo
+          repo_lc="${GITHUB_REPOSITORY,,}"
+          echo "images=ghcr.io/${repo_lc},${{ secrets.DOCKERHUB_USERNAME }}/${repo_lc#*/}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr.io（内置 GITHUB_TOKEN）
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 生成镜像 tag 与 OCI labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.prep.outputs.images }}
+          flavor: latest=false   # latest 由下面的 raw tag 显式控制，避免 semver 隐式行为
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: 断言版本 tag 已产出（拦下 node-semver 不接受的畸形标签，避免只推 latest）
+        run: |
+          if [ "${{ steps.meta.outputs.version }}" != "${{ steps.prep.outputs.version }}" ]; then
+            echo "::error::metadata 未产出预期版本「${{ steps.prep.outputs.version }}」（得到「${{ steps.meta.outputs.version }}」），标签畸形，已中止推送"
+            exit 1
+          fi
+
+      - name: 构建并推送多架构镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.prep.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
