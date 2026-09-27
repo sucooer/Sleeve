@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.freebuff/
+.workbuddy-ai/
+# 工作区助手的过程产物：记忆笔记与本地缓存，只对本机有意义
+.workbuddy/
+outputs/
+# ImageGen 生成的示例封面，只用于设计稿对照，不属于产品资源
+generated-images/
+.env
+# 填了真实口令的部署配置，绝不入库（.env.example 照常提交）
+*.zip
+CODE_REVIEW.md
+docs/superpowers/specs/
