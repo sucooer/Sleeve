@@ -1,6 +1,11 @@
 # 纯标准库项目，无需 pip 依赖 —— 直接使用 alpine 最小镜像
 FROM python:3.13-alpine
 
+# 应用版本号：CI 构建时传 --build-arg VERSION=1.2.3（见 .github/workflows/release.yml），
+# 本地 docker build 不传则默认 dev（页面徽标 vdev、/api/health 返回 dev）
+ARG VERSION=dev
+ENV SLEEVE_VERSION=${VERSION}
+
 # 关闭 pyc 写入与输出缓冲，省掉一层无用字节
 # 容器内必须绑 0.0.0.0，否则宿主机的端口映射进不来。
 # 启动守卫判断的是「发布地址」而不是容器内网卡：compose 会传 SLEEVE_PUBLISH_BIND；
