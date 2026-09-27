@@ -1,0 +1,53 @@
+# Sleeve · 部署（Docker Compose）
+#
+#   cp .env.example .env      # 按需改，口令可以留空
+#   docker compose up -d --build
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sleeve:latest
+    restart: unless-stopped
+    environment:
+      SLEEVE_HOST: 0.0.0.0
+      SLEEVE_PORT: "8765"
+      # 缓存落到卷上：容器重建后重复查询才不必重新冷启动（冷查询 20~35 秒）
+      SLEEVE_CACHE_DIR: /data
+      SLEEVE_AUTH: ${SLEEVE_AUTH:-}
+      # 启动守卫要知道「宿主机上把端口发到哪个地址」：容器自己必须绑 0.0.0.0，
+      # 光看它判断不出暴露面。这里把端口映射用的 SLEEVE_BIND 转给应用 ——
+      # 发布地址不是回环、又没设 SLEEVE_AUTH 时，应用会拒绝启动（fail-closed）。
+      SLEEVE_PUBLISH_BIND: ${SLEEVE_BIND:-127.0.0.1}
+      # 逃生阀：确要在可信网络里无鉴权开放时才设 1
+      SLEEVE_AUTH_ALLOW_OPEN: ${SLEEVE_AUTH_ALLOW_OPEN:-}
+      SLEEVE_RATE_LIMIT: ${SLEEVE_RATE_LIMIT:-30/60}
+      # 之前漏了这一行，导致 .env 里写了 CACHE_TTL 也不生效 ——
+      # compose 的 .env 只用于插值，不会自动注入容器，必须在这里显式转发。
+      SLEEVE_CACHE_TTL: ${SLEEVE_CACHE_TTL:-3600}
+      # 出网边界：默认只允许抓「已知平台」（URL_SITE_RULES 里的音乐站点）。
+      # 要抓冷门站点的链接就设 1；回环/内网地址无论如何都会被拒。
+      SLEEVE_ALLOW_ANY_USER_HOST: ${SLEEVE_ALLOW_ANY_USER_HOST:-}
+      HTTP_PROXY: ${SLEEVE_OUTBOUND_PROXY:-}
+      HTTPS_PROXY: ${SLEEVE_OUTBOUND_PROXY:-}
+      NO_PROXY: ${SLEEVE_NO_PROXY:-localhost,127.0.0.1,::1}
+    ports:
+      - "${SLEEVE_BIND:-127.0.0.1}:${SLEEVE_PUBLISH_PORT:-8765}:8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - sleeve-cache:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=4).status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  sleeve-cache:

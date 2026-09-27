@@ -1,0 +1,18 @@
+.git
+.workbuddy-ai
+.workbuddy
+__pycache__
+*.pyc
+*.pyo
+*.zip
+
+# 部署相关：不进构建上下文。.env 里有真实口令，绝不能发到 docker daemon
+.env
+docker-compose.yml
+Dockerfile
+.dockerignore
+README.md
+
+# 与本镜像无关、只占体积的产物
+outputs
+generated-images
