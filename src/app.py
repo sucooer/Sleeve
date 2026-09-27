@@ -14,7 +14,7 @@ import threading
 import time
 import unicodedata
 from collections import Counter
-from html import unescape
+from html import escape, unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import count
 from pathlib import Path
@@ -28,7 +28,14 @@ SRC_DIR = Path(__file__).resolve().parent
 ROOT = SRC_DIR.parent / "public"
 HOST = os.environ.get("SLEEVE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SLEEVE_PORT", "8765"))
-USER_AGENT = "Sleeve/0.1 (local metadata preparation tool)"
+def resolve_version(raw: str | None = None) -> str:
+    """应用版本号。镜像里由 CI 传 --build-arg VERSION → ENV SLEEVE_VERSION 注入；
+    本地直接跑没有这个环境变量时降级为 dev —— 代码里永远不硬编码第二份版本号。"""
+    value = (raw if raw is not None else os.environ.get("SLEEVE_VERSION", "")).strip()
+    return value or "dev"
+
+VERSION = resolve_version()
+USER_AGENT = f"Sleeve/{VERSION} (local metadata preparation tool)"
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_LAST_REQUEST = 0.0
 # 限速时间戳必须与「打请求」这个动作原子地绑在一起，否则并发下形同虚设（见 mb_request）
@@ -2851,6 +2858,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_file(self, path: Path, content_type: str) -> None:
         data = path.read_bytes()
+        if content_type.startswith("text/html"):
+            # 版本注入：index.html 徽标里的 __VERSION__ 占位符换成当前版本；
+            # 页面没有占位符时 replace 是无操作，不会出错。
+            # 进 HTML 前先过 html.escape：版本号来源虽是 CI 校验过的 SemVer 标签，
+            # 但本地环境变量可任意设置，转义是零成本的防线（代码审查任务 1 的前瞻建议）
+            data = data.replace(b"__VERSION__", escape(VERSION).encode("utf-8"))
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
@@ -2862,7 +2875,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_access():
             return
         if urlparse(self.path).path == "/api/health":
-            self.send_json({"ok": True, "service": "Sleeve"})
+            self.send_json({"ok": True, "service": "Sleeve", "version": VERSION})
             return
         route = urlparse(self.path).path
 

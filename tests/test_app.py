@@ -376,6 +376,7 @@ def live_server():
         SLEEVE_PUBLISH_BIND="127.0.0.1",    # 但只发布到回环 → 守卫放行
         SLEEVE_PORT=str(port),
         SLEEVE_CACHE_DIR=tempfile.mkdtemp(prefix="sleeve-test-cache-"),
+        SLEEVE_VERSION="1.2.3",             # 版本注入：health 与页面徽标都应看到它
     )
     process, lines = _spawn_app(env)
     try:
@@ -442,4 +443,50 @@ def test_post_lookup_drops_dangerous_scheme_without_outbound_calls(live_server):
         f"Content-Length: {len(body.encode('utf-8'))}\r\n\r\n{body}",
     )
     assert " 400 " in response.splitlines()[0], response
+
+
+# ------------------------------------------------------------------ 版本注入
+
+def test_resolve_version_defaults_to_dev(monkeypatch):
+    monkeypatch.delenv("SLEEVE_VERSION", raising=False)
+    assert app.resolve_version() == "dev"
+    assert app.resolve_version("   ") == "dev"
+    assert app.resolve_version("1.2.3") == "1.2.3"
+
+
+def test_user_agent_carries_current_version():
+    assert app.VERSION and app.VERSION.strip() == app.VERSION
+    assert app.USER_AGENT.startswith(f"Sleeve/{app.VERSION} ")
+
+
+# ------------------------------------------------------------------ 版本注入（集成）
+
+def test_health_reports_injected_version(live_server):
+    with urlopen(f"http://127.0.0.1:{live_server}/api/health", timeout=2) as response:
+        payload = json.load(response)
+    assert payload["ok"] is True
+    assert payload["version"] == "1.2.3"
+
+
+def test_index_badge_uses_injected_version(live_server):
+    """index.html 徽标里的 __VERSION__ 占位符要被替换成注入的版本；
+    还显示写死的 v0.4、或原样保留占位符，都算注入没生效。"""
+    with urlopen(f"http://127.0.0.1:{live_server}/", timeout=2) as response:
+        html = response.read().decode("utf-8")
+    assert "v1.2.3" in html
+    assert "__VERSION__" not in html
+    assert ">v0.4<" not in html
+
+
+# ------------------------------------------------------------------ 版本注入（Dockerfile 契约）
+
+def test_dockerfile_version_contract():
+    """Dockerfile 与应用的版本契约：ARG/ENV 两行必须字面存在。
+
+    这是版本链路里唯一没有其他测试守护的环节 —— 改名 SLEEVE_VERSION、
+    改默认值或删掉任一行，都会让 CI 注入静默断链（镜像里变 dev）。
+    应用侧默认值 dev 由 test_resolve_version_defaults_to_dev 守护。"""
+    dockerfile = (REPO / "Dockerfile").read_text(encoding="utf-8")
+    assert "ARG VERSION=dev" in dockerfile
+    assert "ENV SLEEVE_VERSION=${VERSION}" in dockerfile
 
