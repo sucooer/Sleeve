@@ -490,3 +490,146 @@ def test_dockerfile_version_contract():
     assert "ARG VERSION=dev" in dockerfile
     assert "ENV SLEEVE_VERSION=${VERSION}" in dockerfile
 
+
+
+# ------------------------------------------------------------------ Apple/iTunes 区域整单切换
+
+def _mk_itunes_collection(country: str, has_tracks: bool = True) -> dict:
+    """构造 iTunes lookup 响应：专辑壳 + 可选一首曲目。country 用三位区码（CHN/JPN/USA）。"""
+    out = {"results": [{
+        "wrapperType": "collection",
+        "collectionName": "TEST ALBUM",
+        "artistName": "Art",
+        "releaseDate": "2026-01-01",
+        "copyright": f"Lbl {country}",
+        "primaryGenreName": "J-Pop",
+        "country": country,
+        "collectionId": "1",
+        "collectionViewUrl": f"https://music.apple.com/{country.lower()}/album/x/1",
+    }]}
+    if has_tracks:
+        out["results"].append({
+            "wrapperType": "track",
+            "trackName": f"T1-{country}",
+            "artistName": "Art",
+            "trackTimeMillis": 1000,
+            "trackNumber": 1,
+            "discNumber": 1,
+        })
+    return out
+
+
+def test_apple_storefront_chain_link_country_first():
+    """尝试顺序：链接自带的区优先，JP/us/默认区兜底（是否切 JP 由艺人名匹配决定，不在这里）。"""
+    assert app.apple_storefront_chain("cn") == ["cn", "jp", "us", ""]
+    assert app.apple_storefront_chain("jp") == ["jp", "us", ""]
+    assert app.apple_storefront_chain("us") == ["us", "jp", ""]
+    assert app.apple_storefront_chain("") == ["", "jp", "us"]
+
+
+def test_apple_jp_first_when_cn_shell_missing_tracks(monkeypatch):
+    """CN 链接 + CN 区只有壳没有曲目：整单改用 JP 区（字段、曲目都按 JP），不再只借曲目表。"""
+    def fake_fetch(url):
+        if "country=cn" in url:
+            return _mk_itunes_collection("CHN", has_tracks=False)
+        return _mk_itunes_collection("JPN")
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    picked = app.itunes_album_by_id("1", "cn", "Art")
+    assert picked["country"] == "jp"
+    assert picked["data"]["country"] == "JPN"
+    assert [t["title"] for t in picked["data"]["tracks"]] == ["T1-JPN"]
+    assert "已按日本区数据整单查询" in picked["note"]
+    assert "JP 区" in picked["note"]
+
+
+def test_apple_jp_missing_falls_back_to_complete_storefront(monkeypatch):
+    """JP 区没有该专辑：回落有完整数据的区（这里是 US），整单切换并注明缺数据的区。"""
+    def fake_fetch(url):
+        if "country=jp" in url:
+            return {"results": []}
+        if "country=cn" in url:
+            return _mk_itunes_collection("CHN", has_tracks=False)
+        return _mk_itunes_collection("USA")
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    picked = app.itunes_album_by_id("1", "cn", "Art")
+    assert picked["country"] == "us"
+    assert picked["data"]["country"] == "USA"
+    assert [t["title"] for t in picked["data"]["tracks"]] == ["T1-USA"]
+    assert "CN 区数据不全" in picked["note"]
+    assert "US 区" in picked["note"]
+
+
+def test_apple_jp_link_keeps_clean_jp_data(monkeypatch):
+    """JP 链接：直接用 JP 区，不产生混搭提醒。"""
+    monkeypatch.setattr(app, "fetch_json", lambda url: _mk_itunes_collection("JPN"))
+    picked = app.itunes_album_by_id("1", "jp", "Art")
+    assert picked["country"] == "jp"
+    assert picked["data"]["country"] == "JPN"
+    assert picked["note"] == ""
+
+
+def test_apple_nowhere_returns_empty(monkeypatch):
+    """任何区都查不到：返回空 data 且 note 为空。"""
+    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    picked = app.itunes_album_by_id("1", "cn", "Art")
+    assert picked["data"] == {}
+    assert picked["note"] == ""
+
+
+def test_apple_west_artist_cn_link_avoids_jp_kana_name(monkeypatch):
+    """欧美歌手 CN 链接：JP 区艺人名日文化（テイラー・スウィフト）与输入不符 → 整单改用
+    艺人名匹配且有完整数据的 US 区，而不是被 JP 日文名污染（否则会被艺人校验整份丢弃）。"""
+    def fake_fetch(url):
+        if "country=jp" in url:
+            # JP 区有完整数据但艺人名是日文片假名
+            return {"results": [
+                {"wrapperType": "collection", "collectionName": "TEST ALBUM", "artistName": "テイラー・スウィフト",
+                 "releaseDate": "2026-01-01", "copyright": "Lbl JPN", "primaryGenreName": "Pop",
+                 "country": "JPN", "collectionId": "1",
+                 "collectionViewUrl": "https://music.apple.com/jp/album/x/1"},
+                {"wrapperType": "track", "trackName": "T1-JP", "artistName": "テイラー・スウィフト",
+                 "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1},
+            ]}
+        if "country=cn" in url:
+            return _mk_itunes_collection("CHN", has_tracks=False)
+        # US 区完整数据，艺人名保持英文原名（与页面输入一致）
+        return {"results": [
+            {"wrapperType": "collection", "collectionName": "TEST ALBUM", "artistName": "Taylor Swift",
+             "releaseDate": "2026-01-01", "copyright": "Lbl USA", "primaryGenreName": "Pop",
+             "country": "USA", "collectionId": "1",
+             "collectionViewUrl": "https://music.apple.com/us/album/x/1"},
+            {"wrapperType": "track", "trackName": "T1-US", "artistName": "Taylor Swift",
+             "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1},
+        ]}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    picked = app.itunes_album_by_id("1", "cn", "Taylor Swift")
+    assert picked["country"] == "us"
+    assert picked["data"]["artist"] == "Taylor Swift"  # 英文名，不被日文化
+    assert [t["title"] for t in picked["data"]["tracks"]] == ["T1-US"]
+    assert "CN 区数据不全" in picked["note"]
+    assert "US 区" in picked["note"]
+
+
+def test_apple_no_matching_full_storefront_borrows_tracks_only(monkeypatch):
+    """华语歌手：JP 区没有、US 区名字罗马化（Hebe Tien）与输入不符 → 不整单切换，
+    保留主来源字段，只借用曲目表（艺人名保持页面一致的写法）。"""
+    def fake_fetch(url):
+        if "country=jp" in url:
+            return {"results": []}
+        if "country=cn" in url:
+            return _mk_itunes_collection("CHN", has_tracks=False)
+        return _mk_itunes_collection("USA") | {
+            "results": [{"wrapperType": "collection", "collectionName": "TEST ALBUM", "artistName": "Hebe Tien",
+                         "releaseDate": "2026-01-01", "copyright": "Lbl USA", "primaryGenreName": "Pop",
+                         "country": "USA", "collectionId": "1",
+                         "collectionViewUrl": "https://music.apple.com/us/album/x/1"},
+                        {"wrapperType": "track", "trackName": "T1-US", "artistName": "Hebe Tien",
+                         "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1}]}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    picked = app.itunes_album_by_id("1", "cn", "田馥甄")
+    assert picked["country"] == "cn"
+    assert picked["data"]["country"] == "CHN"
+    assert picked["data"]["artist"] == "Art"  # 主来源字段保留
+    assert [t["title"] for t in picked["data"]["tracks"]] == ["T1-US"]  # 只借曲目表
+    assert "曲目表借用" in picked["note"]
+    assert "US 区" in picked["note"]
