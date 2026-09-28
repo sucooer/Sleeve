@@ -195,7 +195,7 @@ a:hover { text-decoration: underline; }
   height: 62px;
   padding: 0 var(--pad-x);
 }
-.brand { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.brand { display: flex; align-items: center; gap: var(--s3); min-width: 0; cursor: pointer; }
 .brand-mark { flex: 0 0 auto; display: block; }
 .brand-name { font-size: 16px; font-weight: 600; color: var(--ink-1); letter-spacing: -.2px; }
 .ver {
