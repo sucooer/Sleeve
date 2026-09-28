@@ -150,7 +150,7 @@ function renderReport(report) {
   const externalLinks = report.external_links || [];
   $("#external-count").textContent = `${externalLinks.length} 条`;
   const platformSearch = report.external_platform_search || [];
-  $("#external-links").innerHTML = (externalLinks.length ? `<table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${externalLinks.map((item) => `<tr><td>${escapeHtml(item.site)}</td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table><p class="muted">在 Add release → External links 里按上面的关系类型逐条添加；关系类型可直接照抄。标注「自动发现」的链接是 MusicBrainz 和输入链接都没提供时，按条码或标题检索到的候选，添加前请核对。</p>` : `<div class="empty">还没有可用的外部链接。</div>`) + (platformSearch.length ? `<div class="lookup-hint">下面这些平台还没拿到链接，点开搜索页找到后把 URL 贴回输入框即可自动归类。${report.external_platform_search_note ? escapeHtml(report.external_platform_search_note) : ""}</div><div class="lookup-actions">${platformSearch.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.name)} 搜索</a>`).join("")}</div>` : "");
+  $("#external-links").innerHTML = (externalLinks.length ? `<table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${externalLinks.map((item) => `<tr><td>${escapeHtml(item.site)}</td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table><p class="muted">关系类型照抄；「自动发现」的链接添加前请核对。</p>` : `<div class="empty">还没有可用的外部链接。</div>`) + (platformSearch.length ? `<div class="lookup-hint">下面这些平台还没拿到链接，点开搜索页找到后把 URL 贴回输入框即可自动归类。${report.external_platform_search_note ? escapeHtml(report.external_platform_search_note) : ""}</div><div class="lookup-actions">${platformSearch.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.name)} 搜索</a>`).join("")}</div>` : "");
 
   const candidates = report.catalog_candidates || [];
   $("#catalog-candidates").innerHTML = candidates.length ? `<div class="lookup-hint">品番候选（点击采用为手工品番）：</div><div class="lookup-actions">${candidates.map((item) => `<button class="lookup-link use-catalog" data-value="${escapeHtml(item.value)}">${escapeHtml(item.value)}（${escapeHtml(item.source)}）</button>`).join("")}</div><div class="lookup-hint">${escapeHtml(candidates[0].note)}</div>` : "";
@@ -173,7 +173,7 @@ function renderReport(report) {
 
   // Annotation 草稿：版权行 + 可用地区
   const annotation = report.annotation || {};
-  $("#annotation").innerHTML = annotation.combined ? `<div class="note-block"><div class="note-head"><span>Copyright notice</span></div><pre>${escapeHtml(annotation.copyright || "（没有查到版权行）")}</pre></div><div class="note-block"><div class="note-head"><span>Countries where available</span></div><pre>${escapeHtml(annotation.available || "（没有查到可用地区）")}</pre></div><p class="muted">数字发行把版权行与可用地区写进 MusicBrainz 的 Annotation 是惯例；只需复制你确认过的部分。</p>` : `<div class="empty">没有拿到可用的版权行或地区信息，没有生成 Annotation 草稿。</div>`;
+  $("#annotation").innerHTML = annotation.combined ? `<div class="note-block"><div class="note-head"><span>Copyright notice</span></div><pre>${escapeHtml(annotation.copyright || "（没有查到版权行）")}</pre></div><div class="note-block"><div class="note-head"><span>Countries where available</span></div><pre>${escapeHtml(annotation.available || "（没有查到可用地区）")}</pre></div><p class="muted">复制你确认过的版权行与地区。</p>` : `<div class="empty">没有拿到可用的版权行或地区信息，没有生成 Annotation 草稿。</div>`;
 
   // 艺人解析：别建重名艺人
   const artistCredits = report.artist_credits || [];
@@ -595,6 +595,17 @@ document.addEventListener("click", async (event) => {
   }
   showNotice(`${copied ? "链接已复制到剪贴板" : "链接如下（剪贴板不可用）"}，请粘到浏览器地址栏打开：\n${link.href}\n（这个预览面板会把新窗口换成当前页，直接点会丢失本次报告；确实要跳转请用 Ctrl/⌘ + 点击。）`);
 });
+
+// 返回顶部：滚动超过一屏才出现；点击平滑回到顶部（尊重系统「减少动态效果」）。
+(function setupToTop() {
+  const btn = $("#to-top");
+  if (!btn) return;
+  const onScroll = () => btn.classList.toggle("show", window.scrollY > 600);
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive: true });
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  btn.addEventListener("click", () => window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" }));
+})();
 
 // 启动认证检查（放在文件末尾：$ 与 DOM 都已就绪）。
 initAuth();
