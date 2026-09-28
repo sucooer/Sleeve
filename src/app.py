@@ -192,6 +192,16 @@ if AUTH_RAW and ":" not in AUTH_RAW:
     raise SystemExit("SLEEVE_AUTH 格式应为 user:password，当前值里没有冒号，拒绝启动。")
 AUTH_HEADER = "Basic " + base64.b64encode(AUTH_RAW.encode("utf-8")).decode("ascii") if AUTH_RAW else ""
 
+# 认证有效期（秒）：登录后超过该时长需要重新认证。默认 12 小时；0 = 永不过期。
+# 服务端是无状态 Basic 校验，本身没有「会话」概念；TTL 作为约定下发给前端，
+# 前端把登录时间戳与 TTL 一起保存，到点自动清除本地凭据并回到登录页。
+# 未设置时沿用默认 12h（安全管理上，不设 = 永不过期是一个坑）。
+try:
+    AUTH_TTL = int(os.environ.get("SLEEVE_AUTH_TTL", "43200") or "0")
+except ValueError:
+    AUTH_TTL = 43200
+    print(f"[warn] SLEEVE_AUTH_TTL 应为秒数，忽略当前值，使用默认 43200。", flush=True)
+
 # 逃生阀：确要在可信网络里无鉴权开放时才显式设 1
 ALLOW_OPEN_NO_AUTH = os.environ.get("SLEEVE_AUTH_ALLOW_OPEN", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -2940,13 +2950,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         supplied = self.headers.get("Authorization", "").encode("utf-8")
         if hmac.compare_digest(supplied, AUTH_HEADER.encode("utf-8")):
-            self.send_json({"ok": True, "auth": True})
+            self.send_json({"ok": True, "auth": True, "auth_ttl": AUTH_TTL})
             return
         username = first(str(body.get("username", ""))).strip()
         password = str(body.get("password", ""))
         candidate = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         if hmac.compare_digest(candidate.encode("utf-8"), AUTH_HEADER.encode("utf-8")):
-            self.send_json({"ok": True, "auth": True})
+            self.send_json({"ok": True, "auth": True, "auth_ttl": AUTH_TTL})
         else:
             self.send_json({"error": "用户名或密码错误"}, 401)
 
@@ -2969,7 +2979,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_access():
             return
         if urlparse(self.path).path == "/api/health":
-            self.send_json({"ok": True, "service": "Sleeve", "version": VERSION, "auth": bool(AUTH_HEADER)})
+            self.send_json({"ok": True, "service": "Sleeve", "version": VERSION, "auth": bool(AUTH_HEADER), "auth_ttl": AUTH_TTL})
             return
         route = urlparse(self.path).path
 
