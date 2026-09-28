@@ -31,6 +31,33 @@
     <span class="blob blob-d"></span>
   </div>
 
+  <!-- 登录层：服务端开启 SLEEVE_AUTH 时，前端用自己的登录界面收凭据（替代浏览器
+       原生 Basic 弹窗）。默认显示，app.js 启动后根据 /api/health 的 auth 标志与
+       本地已存凭据决定隐藏还是停留。 -->
+  <div id="login-overlay" class="login-overlay">
+    <form id="login-form" class="login-card" autocomplete="on">
+      <svg class="login-mark" width="56" height="56" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="7.5" fill="#5865F2" />
+        <rect x="7" y="10.5" width="4" height="11" rx="2" fill="#FFFFFF" />
+        <rect x="14" y="6" width="4" height="20" rx="2" fill="#FFFFFF" />
+        <rect x="21" y="9" width="4" height="14" rx="2" fill="#FFFFFF" />
+      </svg>
+      <h1 class="login-title">Sleeve</h1>
+      <p class="login-sub">登录到数字合辑建库工作台</p>
+      <div class="login-field">
+        <label for="login-username">用户名</label>
+        <input id="login-username" name="username" type="text" autocomplete="username" required spellcheck="false" autofocus />
+      </div>
+      <div class="login-field">
+        <label for="login-password">密码</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+      </div>
+      <p id="login-error" class="login-error" hidden></p>
+      <button id="login-submit" type="submit">登&nbsp;录</button>
+      <p class="login-foot">本工作台需要认证后使用</p>
+    </form>
+  </div>
+
   <a class="skip" href="#main">跳到主内容</a>
 
   <header class="topbar">
