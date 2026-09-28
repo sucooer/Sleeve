@@ -341,13 +341,12 @@ h1 {
 
 .query-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s5);
   align-items: start;
 }
 .field-label { display: block; margin-bottom: var(--s2); color: var(--ink-3); font-size: 12.5px; font-weight: 500; }
-.query-side .field-label { margin-top: var(--s4); }
-.query-side .field-label:first-child { margin-top: 0; }
+.field-hint { margin-top: var(--s2); color: var(--ink-5); font-size: 12px; line-height: 1.5; }
 
 input[type="text"],
 input:not([type]),
@@ -365,7 +364,7 @@ textarea {
 input[type="text"], input:not([type]) { height: 48px; }
 textarea {
   resize: vertical;
-  min-height: 126px;
+  min-height: 156px;
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.65;
@@ -376,16 +375,6 @@ input:focus, textarea:focus {
   box-shadow: 0 0 0 3px rgba(88, 101, 242, .14);
 }
 
-.chips { display: flex; flex-wrap: wrap; gap: 7px; }
-.chip {
-  padding: 5px 9px;
-  border-radius: var(--radius-xs);
-  background: rgba(255, 255, 255, .06);
-  border: 1px solid var(--line);
-  color: var(--ink-4);
-  font-size: 11px;
-}
-
 .card-foot {
   display: flex;
   align-items: center;
@@ -394,7 +383,6 @@ input:focus, textarea:focus {
   flex-wrap: wrap;
   margin-top: var(--s5);
 }
-.foot-left { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
 
 /* 按钮 */
 button {
@@ -825,6 +813,10 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   font: 11.5px/1.7 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* 长列表（如 Countries where available 的 200+ 国家）限高滚动，避免撑爆页面 */
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .copy-note {
   height: 24px;
@@ -1134,9 +1126,9 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
   .cover-placeholder { flex-basis: 104px; width: 104px; }
   .source { flex-direction: column; align-items: flex-start; gap: 4px; }
 
-  .card-foot { flex-direction: column; align-items: stretch; }
-  .foot-left { justify-content: space-between; }
-  .primary { flex: 1 1 auto; }
+  .card-foot { flex-direction: row; align-items: center; flex-wrap: nowrap; }
+  .status { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .primary { flex: 0 0 auto; }
 
   .phase-head h3 { font-size: 15px; }
   .phase-num { flex-basis: 22px; }
