@@ -110,30 +110,14 @@
           <div class="query-body">
             <div class="query-col">
               <label class="field-label" for="source-urls">来源链接</label>
-              <textarea id="source-urls" name="urls" rows="4" placeholder="https://music.apple.com/...&#10;https://open.spotify.com/album/...&#10;https://ototoy.jp/...&#10;https://mora.jp/package/..."></textarea>
-            </div>
-            <div class="query-side">
-              <label class="field-label" for="manual-catalog">手工品番</label>
-              <input id="manual-catalog" name="catalog" placeholder="例如 4580784043209 或 SEXX03269B00Z" />
-              <span class="field-label">支持站点</span>
-              <div class="chips">
-                <span class="chip">Apple Music</span>
-                <span class="chip">Spotify</span>
-                <span class="chip">Deezer</span>
-                <span class="chip">Qobuz</span>
-                <span class="chip">OTOTOY</span>
-                <span class="chip">mora</span>
-                <span class="chip">TIDAL</span>
-                <span class="chip">Bandcamp</span>
-              </div>
+              <textarea id="source-urls" name="urls" rows="6" placeholder="https://music.apple.com/...&#10;https://open.spotify.com/album/...&#10;https://ototoy.jp/...&#10;https://mora.jp/package/..."></textarea>
+              <p class="field-hint">每行一个链接；可多行，一次最多处理若干张。</p>
             </div>
           </div>
 
           <div class="card-foot">
-            <div class="foot-left">
-              <button class="primary" type="submit">查询</button>
-              <span id="status" class="status">等待输入</span>
-            </div>
+            <span id="status" class="status">等待输入</span>
+            <button class="primary" type="submit">查询</button>
           </div>
         </form>
       </div>

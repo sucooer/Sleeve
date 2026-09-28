@@ -1,4 +1,7 @@
 let currentReport = null;
+// 手工品番已从 UI 移除（不再提供手动输入框），但分享链接和「品番候选」按钮仍能
+// 携带/采用品番：此变量承接 URL 参数与候选按钮写入的值，随请求发给后端。
+let manualCatalogValue = "";
 
 // ---------------------------------------------------------------
 // 认证（feat/custom-login）：自定义登录页替代浏览器原生 Basic 弹窗。
@@ -8,6 +11,9 @@ let currentReport = null;
 // /api/health 返回 auth:false，登录层会自动隐藏。
 // ---------------------------------------------------------------
 const AUTH_STORAGE_KEY = "sleeve_auth_v1";
+const AUTH_AT_KEY = "sleeve_auth_at_v1";
+// 后端没下发 TTL（旧版服务端）时使用的兜底有效期：12 小时，与后端默认一致
+const AUTH_TTL_FALLBACK = 12 * 60 * 60;
 
 const getStoredAuth = () => {
   try { return localStorage.getItem(AUTH_STORAGE_KEY) || ""; } catch { return ""; }
@@ -20,8 +26,28 @@ const clearStoredAuth = () => {
 };
 const basicAuthHeader = () => (getStoredAuth() ? `Basic ${getStoredAuth()}` : "");
 
+// 认证有效期（秒）。initAuth 从 /api/health 的 auth_ttl 读取；0 = 永不过期。
+let authTtl = 0;
+
+// 距离登录是否已超过 TTL：是则清凭据并弹回登录层。
+// at=0（旧版本地数据没有时间戳）时不强制过期，等下一次登录写入时间戳。
+function checkAuthExpiry() {
+  if (!authTtl) return; // 永不过期 / 尚未拿到 TTL
+  let at = 0;
+  try { at = Number(localStorage.getItem(AUTH_AT_KEY) || 0); } catch { /* ignore */ }
+  if (!at) return;
+  if (Date.now() - at > authTtl * 1000) expireAuthNow();
+}
+
+const expireAuthNow = () => {
+  clearStoredAuth();
+  try { localStorage.removeItem(AUTH_AT_KEY); } catch { /* ignore */ }
+  showLogin("登录已过期，请重新认证");
+};
+
 // 统一业务请求入口：自动带上已保存的凭据；收到 401 时清凭据并回到登录层。
 async function apiFetch(path, options = {}) {
+  checkAuthExpiry();
   const headers = new Headers(options.headers || {});
   const auth = basicAuthHeader();
   if (auth) headers.set("Authorization", auth);
@@ -68,6 +94,10 @@ function setupLoginForm() {
       });
       if (response.ok) {
         setStoredAuth(credentials);
+        try { localStorage.setItem(AUTH_AT_KEY, String(Date.now())); } catch { /* ignore */ }
+        // 登录响应里也带有效期，health 没取到（如已过期的旧登录）时补上
+        const data = await response.json().catch(() => ({}));
+        if (typeof data.auth_ttl === "number") authTtl = data.auth_ttl;
         hideLogin();
         if ($("#login-password")) $("#login-password").value = "";
       } else {
@@ -90,7 +120,22 @@ async function initAuth() {
     const response = await fetch("/api/health", { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
     authEnabled = data.auth !== false;
+    // 后端下发有效期；旧版服务端没有该字段时用兜底 12h
+    if (typeof data.auth_ttl === "number") authTtl = data.auth_ttl;
+    else if (data.auth) authTtl = AUTH_TTL_FALLBACK;
   } catch (error) { /* 保持默认：视为需要认证 */ }
+  if (!authEnabled) { hideLogin(); return; }
+  // 已有凭据但本地没时间戳（旧数据）：记为「刚登录」，从这一刻开始计时
+  if (getStoredAuth()) {
+    let at = 0;
+    try { at = Number(localStorage.getItem(AUTH_AT_KEY) || 0); } catch { /* ignore */ }
+    if (!at) {
+      try { localStorage.setItem(AUTH_AT_KEY, String(Date.now())); } catch { /* ignore */ }
+    }
+  }
+  checkAuthExpiry();
+  // 到点后即使没有业务请求，也要自动弹回登录层
+  setInterval(checkAuthExpiry, 60000);
   if (!authEnabled || getStoredAuth()) hideLogin();
   else showLogin();
 }
@@ -349,7 +394,7 @@ function collectUrls() {
 const lookupButton = $("#lookup-form button.primary");
 
 async function runLookup() {
-  const manualCatalog = ($("#manual-catalog").value || "").trim();
+  const manualCatalog = manualCatalogValue;
   const urls = collectUrls();
   const status = $("#status");
   if (!urls.length) {
@@ -405,7 +450,7 @@ if (lookupButton) lookupButton.addEventListener("click", () => runLookup());
 document.addEventListener("click", (event) => {
   const useCatalog = event.target.closest(".use-catalog");
   if (useCatalog) {
-    $("#manual-catalog").value = useCatalog.dataset.value || "";
+    manualCatalogValue = useCatalog.dataset.value || "";
     runLookup();
   }
 });
@@ -517,7 +562,7 @@ $("#copy-share").addEventListener("click", async (event) => {
   if (!urls.length) return;
   const params = new URLSearchParams();
   urls.forEach((url) => params.append("urls", url));
-  const catalog = ($("#manual-catalog").value || "").trim();
+  const catalog = manualCatalogValue;
   if (catalog) params.set("catalog", catalog);
   await copyText(`${location.origin}${location.pathname}?${params.toString()}`, event.target, "复制分享链接");
 });
@@ -553,7 +598,7 @@ document.addEventListener("click", async (event) => {
   if (!urls.length) return;
   $("#source-urls").value = urls.join("\n");
   const catalog = params.get("catalog");
-  if (catalog) $("#manual-catalog").value = catalog;
+  if (catalog) manualCatalogValue = catalog;
   runLookup();
 })();
 document.addEventListener("click", async (event) => {
