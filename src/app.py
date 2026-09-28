@@ -2988,6 +2988,12 @@ if __name__ == "__main__":
     print(f"Sleeve running at http://{HOST}:{PORT}", flush=True)
     try:
         Server((HOST, PORT), Handler).serve_forever()
+    except KeyboardInterrupt:
+        # Ctrl+C 直接打断 serve_forever() 时会抛 KeyboardInterrupt；
+        # 不接住的话终端会甩一大段 Traceback，看起来像程序崩了。
+        # 这里接住并给一句明确的退出提示（ThreadingHTTPServer 的
+        # daemon_threads=True，请求线程不会拖住进程退出）。
+        print("\nSleeve 已停止（Ctrl+C）", flush=True)
     except OSError as exc:
         print(f"启动失败：{exc}")
         print(f"端口 {PORT} 上似乎已经有实例在运行。请先结束旧进程：")
