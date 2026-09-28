@@ -1170,9 +1170,13 @@ def apple_storefront_chain(preferred: str) -> list[str]:
     """按优先级给出要尝试的商店区域：先用链接自带的区，再用常见区兜底。
 
     两边都不能只靠一个：
-      - 链接里的 /cn/ 只代表网页语言，这张专辑未必在 CN 区上架（CN 区常常没有曲目数据）；
+      - 链接里的 /cn/ 只代表网页语言，这张专辑未必在 CN 区上架（CN 区常常只有专辑壳、
+        没有曲目数据）；
       - 省略 country 时接口一律按**美区**返回，中文专辑的艺人名会变成「Hebe Tien」这种罗马字，
         和页面抓到的「田馥甄」对不上，接着会被下面的艺人校验判定为不匹配而整份丢弃。
+
+    JP 区是否优先不在这里决定 —— 由 itunes_album_by_id 按「JP 区艺人名与输入艺人是否一致」
+    在收尾时决定整单切换，避免欧美歌手的链接被日文片假名污染。
     """
     chain: list[str] = []
     for code in [preferred, "jp", "us", ""]:
@@ -1185,18 +1189,32 @@ def apple_storefront_chain(preferred: str) -> list[str]:
 def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: str = "") -> dict[str, Any]:
     """按区依次查同一张专辑。
 
-    区域选择的原则：**专辑级字段以「链接自带的区」为准** —— 艺人写法、厂牌、区域都跟着那一区走；
-    只有当该区确实没有曲目数据时，才从别的区借一份曲目表（音频是同一张，曲目名不会因此改变）。
-    这样「粘贴 /cn/ 的链接」不会为了拿曲目而把整份资料换成日区。
+    区域选择的原则：**数据完整优先，且整单切换只给「艺人名对得上」的区** ——
+      - 链接自带的区有完整曲目就用它（链接区只是个候选，不是唯一答案）；
+      - 链接区缺曲目表时，若 JP 区有完整数据且艺人名与输入一致（日音/JP 规范名），
+        整单改用 JP 区 —— 艺人写法、厂牌、区域、曲目表都跟 JP 区走；
+      - JP 区艺人名对不上（如欧美歌手的日文片假名「テイラー・スウィフト」）时，
+        整单改用其他艺人名匹配且有完整数据的区，避免被日文名污染；
+      - 实在没有艺人名匹配的完整区，才退回「保留主来源字段 + 借用曲目表」的兜底。
 
+    这样「粘贴 /cn/ 的链接」：日音专辑整单按 JP 区；欧美专辑不会因 JP 区日文名与
+    页面不符而被艺人校验整份丢弃。
     返回 {data, country, tracks_from, note}；完全查不到时 data 为 {}。
     """
     wanted = artist_hint.strip().casefold().replace(" ", "")
     primary: dict[str, Any] = {}
     primary_country = ""
     primary_artist_ok = False
+    jp_data: dict[str, Any] = {}
+    matched_donor: dict[str, Any] = {}
+    matched_donor_country = ""
+    donor_data: dict[str, Any] = {}
     donor_tracks: list[dict[str, Any]] = []
     donor_country = ""
+    # 链接自带区的状态：用于 note 准确说明「为什么不用链接区」（未查到 / 缺曲目 / 名字不符）
+    preferred_found = False
+    preferred_tracks = False
+    preferred_artist_ok = False
 
     for code in apple_storefront_chain(preferred_country):
         suffix = f"&country={code}" if code else ""
@@ -1206,9 +1224,17 @@ def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: 
             continue
         if not first(data.get("title")):
             continue
+        if code == "jp" and not jp_data:
+            jp_data = data
         got = first(data.get("artist")).casefold().replace(" ", "")
         artist_ok = bool(wanted) and got == wanted
         tracks = data.get("tracks") or []
+        if code == preferred_country.lower():
+            preferred_found = True
+            if tracks:
+                preferred_tracks = True
+            if artist_ok:
+                preferred_artist_ok = True
 
         # 取第一个有结果的区作主来源；若它艺人名对不上，而后面某个区对得上，则改用它。
         if not primary:
@@ -1217,19 +1243,57 @@ def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: 
             primary, primary_country, primary_artist_ok = data, code, artist_ok
 
         if tracks and not donor_tracks:
-            donor_tracks, donor_country = tracks, code
+            donor_data, donor_tracks, donor_country = data, tracks, code
+        if tracks and artist_ok and not matched_donor:
+            matched_donor, matched_donor_country = data, code
 
-        # 艺人名对得上、曲目也拿到了，就没有再试别的区的必要
-        if primary_artist_ok and donor_tracks:
+        # 主来源区艺人名对得上且自带完整曲目，就没有再试别的区的必要
+        # （只借曲目表不算数：链接区缺曲目时，后面可能还有艺人名匹配的完整区，值得继续试）
+        if primary_artist_ok and primary.get("tracks"):
             break
 
     if not primary:
         return {"data": {}, "country": "", "tracks_from": "", "note": ""}
 
     note = ""
+    # 链接区问题描述：区分「未查到 / 缺曲目 / 名字不符」，别把所有情况都笼统说成数据不全
+    preferred_label = f"链接所在 {preferred_country.upper() or '默认'} 区"
+    if not preferred_found:
+        preferred_issue = f"{preferred_label}未查到该专辑"
+    elif not preferred_tracks:
+        preferred_issue = f"{preferred_label}数据不全（缺曲目表）"
+    elif not preferred_artist_ok:
+        preferred_issue = f"{preferred_label}艺人名与输入不符"
+    else:
+        preferred_issue = preferred_label
+
+    # 1) 主来源区自带完整曲目：直接用，不折腾（若主来源已因艺人名匹配切到别的区，说明链接区不理想）
+    if primary.get("tracks"):
+        if preferred_country and primary_country != preferred_country.lower():
+            note = f"{preferred_issue}，已改用 {primary_country.upper()} 区完整数据"
+        return {"data": primary, "country": primary_country, "tracks_from": primary_country, "note": note}
+
+    # 2) 链接区缺曲目：JP 区有完整数据且艺人名与输入一致（日音/JP 规范名）→ 整单改用 JP 区
+    if jp_data and jp_data.get("tracks"):
+        jp_artist = first(jp_data.get("artist")).casefold().replace(" ", "")
+        if not wanted or jp_artist == wanted:
+            primary, primary_country = jp_data, "jp"
+            note = (f"{preferred_issue}，"
+                    f"已按日本区数据整单查询（艺人、厂牌、区域、曲目表均按 JP 区）")
+            return {"data": primary, "country": primary_country, "tracks_from": "jp", "note": note}
+
+    # 3) 艺人名匹配的其他完整区 → 整单切换（不会因名字与页面不符被外部校验丢弃）
+    if matched_donor and matched_donor.get("tracks") and matched_donor_country != primary_country:
+        deficient = primary_country
+        primary, primary_country = matched_donor, matched_donor_country
+        note = (f"{deficient.upper() or '默认'} 区数据不全（缺曲目表），"
+                f"已整单改用 {matched_donor_country.upper()} 区——艺人、厂牌、区域、曲目表均按 {matched_donor_country.upper()} 区")
+        return {"data": primary, "country": primary_country, "tracks_from": matched_donor_country, "note": note}
+
+    # 4) 兜底：没有艺人名匹配的完整区，保留主来源字段，只借用有曲目的区的曲目表
     if donor_tracks and donor_country != primary_country:
-        note = (f"链接所在的 {primary_country.upper() or '默认'} 区没有曲目数据，曲目表借用 {donor_country.upper()} 区；"
-                f"艺人、厂牌、区域等字段仍按 {primary_country.upper() or '默认'} 区")
+        note = (f"{primary_country.upper() or '默认'} 区数据不全，没有艺人名匹配的完整区，"
+                f"曲目表借用 {donor_country.upper()} 区")
     if donor_tracks:
         primary["tracks"] = donor_tracks
         primary["track_count"] = len(donor_tracks)
@@ -2268,10 +2332,13 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     artist_hint = first(page_hint.get("artist")) or artist_name.strip() or first(spotify_data.get("artist")) or first(deezer_data.get("artist"))
 
     apple_url_country = next((extract_apple_country(url) for url in source_urls if extract_apple_country(url)), "")
+    # 默认按链接自带的区；apple_id 分支里查到数据后按实际数据来源区更新（整单切换后可能不再是链接区）
+    apple_country = apple_url_country
     try:
         if apple_id:
             picked = itunes_album_by_id(apple_id, apple_url_country, artist_hint)
             apple_data = picked["data"]
+            apple_country = picked["country"] or apple_url_country
             # 没有标题就是空壳响应，必须当没查到；否则会被当成成功的 Apple 来源，并挡住其他来源补链接
             if not first(apple_data.get("title")) or (artist_hint and first(apple_data.get("artist")) and first(apple_data.get("artist")).casefold().replace(" ", "") != artist_hint.casefold().replace(" ", "")):
                 apple_data = {}
@@ -2533,7 +2600,7 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     auto_sites = sorted({item["site"] for item in external_links if first(item.get("source")).startswith("自动发现")})
     if auto_sites:
         source_warnings.append({"source": "External links", "warning": f"下面来自 {'、'.join(auto_sites)} 的链接是按条码或标题自动检索到的（MusicBrainz 与输入链接都没给），提交前请打开确认是同一张发行"})
-    apple_country = apple_url_country
+    apple_country = apple_country or apple_url_country
     external_links = add_derived_external_links(external_links, apple_id or first(apple_data.get("collection_id")), apple_country, source_urls, first(apple_data.get("url")))
     external_platform_search = platform_search_links(" ".join(item for item in [artist, title] if item), external_links)
     flaky_search_sites = platform_search_notes(external_platform_search)

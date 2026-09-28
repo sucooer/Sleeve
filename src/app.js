@@ -426,18 +426,60 @@ function showNotice(text) {
   noticeTimer = setTimeout(() => box.classList.remove("show"), 8000);
 }
 
-async function copyText(text, button, original) {
+// 复制到剪贴板，三级降级：Clipboard API → execCommand 旧通道 → 选中文本兜底。
+// 注：http + 非 localhost 的环境里 navigator.clipboard 是 undefined（非 secure context），
+// 早期实现会把整段内容塞进 notice，长文本（如 Markdown）会铺满页面；现在一律先走旧通道。
+function legacyCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  ta.style.top = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  let ok = false;
   try {
-    await navigator.clipboard.writeText(text);
+    ok = document.execCommand("copy");
   } catch (error) {
-    // 预览面板 / IDE webview 里剪贴板可能被拒：把内容显示出来，别让人以为按钮坏了
-    showNotice(`剪贴板不可用，请手动复制：\n${text}`);
-    if (button) button.textContent = original;
+    ok = false;
+  }
+  if (ok) {
+    document.body.removeChild(ta);
+  } else {
+    // execCommand 也失败：保留选中状态并提示手动复制，别把内容摊进页面。
+    showNotice("剪贴板被浏览器拒绝，内容已选中：请按 Ctrl+C（Mac 上 ⌘+C）复制。");
+    ta.focus({ preventScroll: true });
+    setTimeout(() => {
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+    }, 60000);
+  }
+  return ok;
+}
+
+async function copyText(text, button, original) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      // clipboard 权限提示被忽略时 writeText 可能永不返回（挂起），加超时降级
+      await Promise.race([
+        navigator.clipboard.writeText(text),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("clipboard timeout")), 1500)),
+      ]);
+      ok = true;
+    }
+  } catch (error) {
+    ok = false;
+  }
+  if (!ok) ok = legacyCopy(text);
+  if (ok) {
+    if (!button) return;
+    button.textContent = "已复制";
+    setTimeout(() => button.textContent = original, 1300);
     return;
   }
-  if (!button) return;
-  button.textContent = "已复制";
-  setTimeout(() => button.textContent = original, 1300);
+  if (button) button.textContent = original;
 }
 
 $("#copy-tracklist").addEventListener("click", async (event) => {
@@ -606,6 +648,15 @@ document.addEventListener("click", async (event) => {
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   btn.addEventListener("click", () => window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" }));
 })();
+
+// 左上角品牌徽标（Sleeve 图标）：点击返回首页 —— 收起报告区、清掉分享链接参数、回到首屏。
+$(".brand").addEventListener("click", () => {
+  $("#results").classList.add("hidden");
+  currentReport = null;
+  try { history.replaceState(null, "", location.pathname); } catch (error) { /* file:// 等环境不允许改地址栏时忽略 */ }
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+});
 
 // 启动认证检查（放在文件末尾：$ 与 DOM 都已就绪）。
 initAuth();
