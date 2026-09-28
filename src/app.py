@@ -177,9 +177,10 @@ CACHE_STATS = CacheStats()
 # 一起限流。所以公网部署必须先开这两道闸。
 #
 # 沿用本仓库一贯的「配了才启用、没配不改变行为」风格：
-#     SLEEVE_AUTH=user:password        开启 HTTP Basic 认证（浏览器会自动弹框）
+#     SLEEVE_AUTH=user:password        开启认证（前端显示自定义登录页，替代浏览器原生 Basic 弹框）
 #     SLEEVE_RATE_LIMIT=30/60          每 IP 每 60 秒最多 30 次请求
-# /api/health 永远豁免 —— 否则 Docker / K8s / 监控探针会被自己的鉴权挡在门外。
+# /api/health 与 /api/login 永远豁免 —— health 供探针使用（响应里带 auth 标志），
+# login 是前端登录页的凭据校验入口，凭据在其内部自行比对。
 #
 # 2026-09-27 补上守卫：原来只校验 SLEEVE_AUTH 的**格式**，不校验它是否**生效**。
 # 照着 .env.example 抄一份 .env 得到的就是「绑定 0.0.0.0 + 空口令」，一句
@@ -2828,26 +2829,30 @@ class Handler(BaseHTTPRequestHandler):
     def require_access(self) -> bool:
         """鉴权与限流的总闸。返回 True 才能继续；否则已经回过 401/429，调用方直接 return。
 
-        认证**连静态文件一起挡**：本工具是私有工作台，公开的页面本身也没有意义，
-        而且页面里的 fetch("/api/lookup") 与资源是**同源**的 —— 浏览器一旦通过
-        了文档级的 Basic 挑战，后续所有同源请求都会自动带上凭据，前端不需要任何改动。
-        限流（见下）则只覆盖 /api/*。
+        认证**不挡静态资源**：前端 shell（public/ 与 /app.js、/styles.css）必须
+        无需凭据即可加载，否则自定义登录页无从呈现。认证只覆盖 /api/* 数据入口
+        （真正会泄漏数据、或作为开放代理扇出到上游的部分）；/api/health 与
+        /api/login 豁免 —— 前者是健康探针（响应里带 auth 标志供前端探测），
+        后者是登录入口，凭据在 do_POST 内自行校验。
+        401 不再携带 WWW-Authenticate 头：那会触发浏览器原生 Basic 弹窗，
+        自定义登录页依赖的是普通 401 响应。
+        限流（见下）只覆盖 /api/*。
         """
-        if urlparse(self.path).path == "/api/health":
+        path = urlparse(self.path).path
+        if path == "/api/health" or path == "/api/login":
             return True
-        if AUTH_HEADER:
+        if AUTH_HEADER and path.startswith("/api/"):
             supplied = self.headers.get("Authorization", "").encode("utf-8")
             # 常量时间比较，避免按字符逐位泄漏口令信息（成本为零，没有理由不用）
             if not hmac.compare_digest(supplied, AUTH_HEADER.encode("utf-8")):
-                self.send_plain(
+                self.send_json(
+                    {"error": "unauthorized", "message": "未认证或凭据无效"},
                     401,
-                    "需要认证：请在弹出的登录框里填写用户名与密码。",
-                    {"WWW-Authenticate": 'Basic realm="Sleeve", charset="UTF-8"'},
                 )
                 return False
         # 限流只盯 /api/*：静态资源是一次本地读盘、不扇出到上游，限它只会让
         # 「刷新一下页面」就吃掉配额；真正会把额度打光的是 /api/lookup 那一串外部请求。
-        if urlparse(self.path).path.startswith("/api/") and not rate_limit_allow(self.client_address[0]):
+        if path.startswith("/api/") and not rate_limit_allow(self.client_address[0]):
             self.send_plain(
                 429,
                 f"请求过于频繁：每 {RATE_LIMIT_WINDOW} 秒最多 {RATE_LIMIT_MAX} 次，请稍后再试。",
@@ -2855,6 +2860,28 @@ class Handler(BaseHTTPRequestHandler):
             )
             return False
         return True
+
+    def handle_login(self, body: dict[str, Any]) -> None:
+        """自定义登录页的凭据校验（POST /api/login）。成功 200；失败 401。
+
+        优先读 Authorization: Basic 头（前端登录页按此方式提交），其次读
+        JSON body 的 username/password，两种提交方式都支持。未启用认证时
+        返回 auth:false，前端据此直接隐藏登录层。
+        """
+        if not AUTH_HEADER:
+            self.send_json({"ok": True, "auth": False, "message": "未启用认证"})
+            return
+        supplied = self.headers.get("Authorization", "").encode("utf-8")
+        if hmac.compare_digest(supplied, AUTH_HEADER.encode("utf-8")):
+            self.send_json({"ok": True, "auth": True})
+            return
+        username = first(str(body.get("username", ""))).strip()
+        password = str(body.get("password", ""))
+        candidate = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        if hmac.compare_digest(candidate.encode("utf-8"), AUTH_HEADER.encode("utf-8")):
+            self.send_json({"ok": True, "auth": True})
+        else:
+            self.send_json({"error": "用户名或密码错误"}, 401)
 
     def send_file(self, path: Path, content_type: str) -> None:
         data = path.read_bytes()
@@ -2875,7 +2902,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_access():
             return
         if urlparse(self.path).path == "/api/health":
-            self.send_json({"ok": True, "service": "Sleeve", "version": VERSION})
+            self.send_json({"ok": True, "service": "Sleeve", "version": VERSION, "auth": bool(AUTH_HEADER)})
             return
         route = urlparse(self.path).path
 
@@ -2915,6 +2942,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         body = self.read_json_body()
         if body is None:
+            return
+        if path == "/api/login":
+            self.handle_login(body)
             return
         if path == "/api/search":
             album_name = first(body.get("album_name")).strip()

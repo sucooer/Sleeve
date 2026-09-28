@@ -1,5 +1,100 @@
 let currentReport = null;
 
+// ---------------------------------------------------------------
+// 认证（feat/custom-login）：自定义登录页替代浏览器原生 Basic 弹窗。
+// 服务端开启 SLEEVE_AUTH 后，/api/* 对未认证请求返回 401（不带
+// WWW-Authenticate 头，不会触发系统弹窗）；前端收集凭据、存本地，
+// 后续业务请求自动携带 Authorization: Basic。服务端未启用认证时
+// /api/health 返回 auth:false，登录层会自动隐藏。
+// ---------------------------------------------------------------
+const AUTH_STORAGE_KEY = "sleeve_auth_v1";
+
+const getStoredAuth = () => {
+  try { return localStorage.getItem(AUTH_STORAGE_KEY) || ""; } catch { return ""; }
+};
+const setStoredAuth = (value) => {
+  try { localStorage.setItem(AUTH_STORAGE_KEY, value); } catch { /* 隐私模式等场景忽略 */ }
+};
+const clearStoredAuth = () => {
+  try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch { /* ignore */ }
+};
+const basicAuthHeader = () => (getStoredAuth() ? `Basic ${getStoredAuth()}` : "");
+
+// 统一业务请求入口：自动带上已保存的凭据；收到 401 时清凭据并回到登录层。
+async function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const auth = basicAuthHeader();
+  if (auth) headers.set("Authorization", auth);
+  const response = await fetch(path, { ...options, headers });
+  if (response.status === 401) {
+    clearStoredAuth();
+    showLogin();
+    throw new Error("需要登录");
+  }
+  return response;
+}
+
+const showLogin = (message) => {
+  const overlay = $("#login-overlay");
+  if (overlay) overlay.classList.remove("hidden");
+  if (message) {
+    const errorEl = $("#login-error");
+    if (errorEl) { errorEl.textContent = message; errorEl.hidden = false; }
+  }
+};
+const hideLogin = () => {
+  const overlay = $("#login-overlay");
+  if (overlay) overlay.classList.add("hidden");
+  const errorEl = $("#login-error");
+  if (errorEl) errorEl.hidden = true;
+};
+
+function setupLoginForm() {
+  const form = $("#login-form");
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = $("#login-username").value.trim();
+    const password = $("#login-password").value;
+    if (!username || !password) { showLogin("请输入用户名和密码"); return; }
+    const submitBtn = $("#login-submit");
+    if (submitBtn) submitBtn.disabled = true;
+    const credentials = btoa(unescape(encodeURIComponent(`${username}:${password}`)));
+    try {
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Basic ${credentials}` },
+        body: JSON.stringify({ username, password }),
+      });
+      if (response.ok) {
+        setStoredAuth(credentials);
+        hideLogin();
+        if ($("#login-password")) $("#login-password").value = "";
+      } else {
+        showLogin("用户名或密码错误");
+      }
+    } catch (error) {
+      showLogin("无法连接服务器，请稍后重试");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+}
+
+// 启动认证检查：读 /api/health 的 auth 标志，决定登录层去留。
+// 服务不可达时保持登录层可见（页面本来就是遮罩，不会闪出内容）。
+async function initAuth() {
+  setupLoginForm();
+  let authEnabled = true;
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    authEnabled = data.auth !== false;
+  } catch (error) { /* 保持默认：视为需要认证 */ }
+  if (!authEnabled || getStoredAuth()) hideLogin();
+  else showLogin();
+}
+
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const display = (value) => value === undefined || value === null || value === "" ? "未确认" : value;
@@ -273,7 +368,7 @@ async function runLookup() {
   const statusTimer = setInterval(tickStatus, 1000);
   if (lookupButton) lookupButton.disabled = true;
   try {
-    const response = await fetch("/api/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls, catalog: manualCatalog }) });
+    const response = await apiFetch("/api/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls, catalog: manualCatalog }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "查询失败");
     if (data.needs_selection) {
@@ -500,3 +595,6 @@ document.addEventListener("click", async (event) => {
   }
   showNotice(`${copied ? "链接已复制到剪贴板" : "链接如下（剪贴板不可用）"}，请粘到浏览器地址栏打开：\n${link.href}\n（这个预览面板会把新窗口换成当前页，直接点会丢失本次报告；确实要跳转请用 Ctrl/⌘ + 点击。）`);
 });
+
+// 启动认证检查（放在文件末尾：$ 与 DOM 都已就绪）。
+initAuth();
