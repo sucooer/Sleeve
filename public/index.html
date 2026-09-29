@@ -365,6 +365,7 @@
                 </div>
               </div>
               <div id="work-relations" class="work-relations"></div>
+              <div id="lyrics-candidates" class="lyrics-candidates"></div>
             </section>
           </div>
 
@@ -374,6 +375,132 @@
               <h2>查询状态与 API 提醒</h2>
             </div>
             <div id="diagnostics" class="diagnostics"></div>
+          </section>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 单曲报告（song 链接） ===================== -->
+    <section id="song-results" class="results hidden" aria-label="单曲建库资料">
+
+      <div class="reportbar">
+        <div class="report-info">
+          <div class="eyebrow">SONG DOSSIER</div>
+          <h2 id="song-report-title">单曲资料</h2>
+          <p id="song-report-subtitle" class="muted"></p>
+        </div>
+        <div class="report-actions">
+          <button id="copy-song-markdown" class="btn">复制 Markdown</button>
+          <button id="download-song-markdown" class="btn">下载 Markdown</button>
+          <button id="download-song-json" class="btn">下载 JSON</button>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <nav class="rail" aria-label="单曲报告导航">
+          <div class="rail-head">
+            <div class="eyebrow">SONG INDEX</div>
+          </div>
+          <ul class="rail-list" id="song-rail-list">
+            <li><a href="#ms1"><span class="rn">S1</span>歌曲信息</a></li>
+            <li><a href="#ms2"><span class="rn">S2</span>所属专辑</a></li>
+            <li><a href="#ms3"><span class="rn">S3</span>Apple Credits</a></li>
+            <li><a href="#ms4"><span class="rn">S4</span>Work 关系</a></li>
+            <li><a href="#ms5"><span class="rn">S5</span>歌词候选</a></li>
+            <li><a href="#ms6"><span class="rn">S6</span>外部链接</a></li>
+            <li><a href="#ms7"><span class="rn">S7</span>核对清单</a></li>
+            <li><a href="#ms8"><span class="rn">S8</span>Edit note</a></li>
+            <li><a href="#ms9"><span class="rn">S9</span>查询诊断</a></li>
+          </ul>
+        </nav>
+
+        <div class="main-col">
+
+          <section class="card" id="ms1">
+            <div class="card-head">
+              <span class="step">S1</span>
+              <h2>歌曲信息</h2>
+              <span class="head-hint">recording 建库先看这一栏</span>
+            </div>
+            <div id="song-cover" class="cover-panel"></div>
+            <div id="song-fields" class="fields"></div>
+          </section>
+
+          <section class="card" id="ms2">
+            <div class="card-head">
+              <span class="step">S2</span>
+              <h2>所属专辑</h2>
+              <span class="head-hint">需要建专辑资料时切到专辑报告</span>
+            </div>
+            <div id="song-album-card"></div>
+          </section>
+
+          <section class="card" id="ms3">
+            <div class="card-head">
+              <span class="step">S3</span>
+              <h2>Apple Music Credits</h2>
+              <span class="head-hint">版权方侧数据，MB 有没有都不影响</span>
+            </div>
+            <div id="song-credits" class="work-relations"></div>
+          </section>
+
+          <section class="card" id="ms4">
+            <div class="card-head">
+              <span class="step">S4</span>
+              <h2>Work 关系（MusicBrainz）</h2>
+              <div class="title-actions">
+                <span id="song-work-count" class="pill"></span>
+              </div>
+            </div>
+            <div id="song-work-relations" class="work-relations"></div>
+          </section>
+
+          <section class="card" id="ms5">
+            <div class="card-head">
+              <span class="step">S5</span>
+              <h2>Lyrics 候选</h2>
+              <span class="head-hint">MB 白名单站点歌词页直达</span>
+            </div>
+            <div id="song-lyrics-candidates" class="lyrics-candidates"></div>
+          </section>
+
+          <section class="card" id="ms6">
+            <div class="card-head">
+              <span class="step">S6</span>
+              <h2>外部链接</h2>
+              <div class="title-actions">
+                <span id="song-external-count" class="pill"></span>
+              </div>
+            </div>
+            <div id="song-external-links" class="external"></div>
+          </section>
+
+          <section class="card" id="ms7">
+            <div class="card-head">
+              <span class="step">S7</span>
+              <h2>提交前核对</h2>
+              <div class="title-actions">
+                <span id="song-review-count" class="pill is-alert"></span>
+              </div>
+            </div>
+            <div id="song-checklist" class="checklist"></div>
+          </section>
+
+          <section class="card" id="ms8">
+            <div class="card-head">
+              <span class="step">S8</span>
+              <h2>Edit note 草稿</h2>
+            </div>
+            <div id="song-edit-notes" class="notes"></div>
+          </section>
+
+          <section class="card" id="ms9">
+            <div class="card-head">
+              <span class="step">S9</span>
+              <h2>查询状态与 API 提醒</h2>
+            </div>
+            <div id="song-diagnostics" class="diagnostics"></div>
           </section>
 
         </div>

@@ -162,6 +162,12 @@ const splitUrls = (values) => (Array.isArray(values) ? values : [values])
   .filter(Boolean);
 
 function renderReport(report) {
+  // 单曲链接的报告结构与专辑报告几乎不重叠，走独立渲染
+  if (report.report_type === "song") {
+    currentReport = report;
+    renderSongReport(report);
+    return;
+  }
   currentReport = report;
   $("#results").classList.remove("hidden");
   $("#report-title").textContent = report.release.title || "建库资料";
@@ -243,6 +249,8 @@ function renderReport(report) {
     wrCount.textContent = creditsN ? `Apple Credits ${creditsN} 曲` : (workRels.status === "skipped" ? "未查询" : `${workRels.work_count || 0} work / ${workRels.relation_count || 0} 关系`);
   }
   $("#work-relations").innerHTML = renderWorkRelations(workRels);
+  const lyricsCandidates = report.lyrics_candidates || [];
+  $("#lyrics-candidates").innerHTML = lyricsCandidates.length ? renderLyricsCandidates(lyricsCandidates) : "";
   $("#diagnostics").innerHTML = [...report.confidence.notes.map((note) => `<div class="diagnostic">${escapeHtml(note)}</div>`), ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`), ...report.source_errors.map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`), ...report.api_notes.map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`)].join("");
   const reviewCount = $("#review-count");
   if (reviewCount) reviewCount.textContent = report.manual_review.length ? `${report.manual_review.length} 项待勾` : "已核对完";
@@ -252,6 +260,103 @@ function renderReport(report) {
   // 工具栏高度会随标题换行 / 按钮换行变化，左导航与锚点的让位量要跟着实测值走
   syncBarOffset();
   window.scrollTo({ top: $("#results").offsetTop - 20, behavior: "smooth" });
+}
+
+function renderSongReport(report) {
+  const s = report.song || {};
+  $("#results").classList.add("hidden");
+  const box = $("#song-results");
+  box.classList.remove("hidden");
+  $("#song-report-title").textContent = s.title || "单曲资料";
+  const albumPart = s.album ? `《${s.album}》` : "所属专辑未确认";
+  $("#song-report-subtitle").textContent = `${s.artist || "未知艺人"} · ${albumPart}${s.release_date ? ` · ${s.release_date}` : ""}`;
+
+  // S1 歌曲信息
+  const cover = s.artwork_url;
+  $("#song-cover").innerHTML = cover
+    ? `<img src="${escapeHtml(safeHref(cover))}" alt="${escapeHtml(s.title || "cover")}" />`
+    : `<div class="cover-placeholder">未找到该单曲封面</div>`;
+  const fields = [
+    ["Artist", s.artist],
+    ["时长", s.length || "未确认"],
+    ["ISRC", s.isrc || "未确认"],
+    ["发行日期", s.release_date || "未确认"],
+    ["类型", s.genre || "未确认"],
+  ];
+  $("#song-fields").innerHTML = fields.map(([key, value]) => `<div class="field"><div class="key">${escapeHtml(key)}</div><div class="value">${escapeHtml(value)}</div></div>`).join("");
+
+  // S2 所属专辑：给线索 + 一键切专辑报告
+  const albumUrl = s.album_url || "";
+  $("#song-album-card").innerHTML = `<div class="song-album">
+    <div>
+      <strong>${escapeHtml(s.album || "未确认")}</strong>
+      <p class="muted">${escapeHtml(s.album_source || "平台")} ID ${escapeHtml(s.album_platform_id || "—")}${s.track_url ? `<br/><a href="${escapeHtml(safeHref(s.track_url))}" target="_blank" rel="noreferrer">打开 ${escapeHtml(s.album_source || "平台")} 单曲页</a>` : ""}</p>
+    </div>
+    <div class="lookup-actions">
+      ${albumUrl ? `<button class="lookup-link song-to-album" data-url="${escapeHtml(albumUrl)}" type="button">用专辑方式查询</button><a class="lookup-link" href="${escapeHtml(safeHref(albumUrl))}" target="_blank" rel="noreferrer">打开专辑页</a>` : ""}
+    </div>
+  </div>
+  ${albumUrl ? `<p class="hint">单曲报告聚焦 recording / work / credits / 歌词页；要建整张专辑（条码、品番、发行地区、全部曲目）时用「用专辑方式查询」。</p>` : `<p class="hint">${escapeHtml(s.album_source || "该平台")} 未返回所属专辑的 ID / 链接；需要专辑资料时请粘贴专辑链接再查询。</p>`}`;
+
+  // S3 Apple Credits
+  $("#song-credits").innerHTML = renderSongCredits(report.apple_credits || []);
+
+  // S4 Work 关系（复用 album 版的渲染，结构相同）
+  const wr = report.work_relations || { status: "skipped", notice: "" };
+  const wrCount = $("#song-work-count");
+  if (wrCount) {
+    wrCount.textContent = (wr.apple_credits || []).length ? `Apple Credits ${wr.apple_credits.length} 曲`
+      : (wr.status === "skipped" ? "未查询" : `${wr.work_count || 0} work / ${wr.relation_count || 0} 关系`);
+  }
+  $("#song-work-relations").innerHTML = renderWorkRelations(wr);
+
+  // S5 歌词候选
+  const lc = report.lyrics_candidates || [];
+  $("#song-lyrics-candidates").innerHTML = lc.length ? renderLyricsCandidates(lc) : `<div class="empty">没有生成歌词候选（缺少曲目标题）。</div>`;
+
+  // S6 外部链接（track 级）
+  const ext = report.external_links || [];
+  const extCount = $("#song-external-count");
+  if (extCount) extCount.textContent = `${ext.length} 条`;
+  $("#song-external-links").innerHTML = ext.length ? `<table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${ext.map((item) => `<tr><td>${escapeHtml(item.site)}</td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">还没有可用的外部链接。</div>`;
+
+  // S7 核对清单
+  const items = report.manual_review || [];
+  $("#song-checklist").innerHTML = items.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}" /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("") || `<div class="empty">没有核对项。</div>`;
+  const reviewCount = $("#song-review-count");
+  if (reviewCount) reviewCount.textContent = items.length ? `${items.length} 项待勾` : "已核对完";
+
+  // S8 Edit note 草稿
+  const notes = report.edit_notes || {};
+  $("#song-edit-notes").innerHTML = Object.entries(notes).map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
+
+  // S9 诊断
+  const diagnostics = [
+    ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`),
+    ...(report.source_errors || []).map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`),
+    ...(report.api_notes || []).map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`),
+  ];
+  $("#song-diagnostics").innerHTML = diagnostics.join("") || `<div class="empty">没有诊断信息。</div>`;
+
+  syncBarOffset();
+  window.scrollTo({ top: box.offsetTop - 20, behavior: "smooth" });
+}
+
+function renderSongCredits(credits) {
+  if (!credits.length) {
+    return `<div class="diagnostic">Apple 歌曲页面没有抓到 Credits 区块（可能被 WAF 挡或页面结构变化）。词曲作者 / 制作信息请从发行页面或官方渠道人工补齐。</div>`;
+  }
+  const groupsHtml = (creditGroup) => {
+    const itemsHtml = (creditGroup.items || []).map((it) => {
+      const roles = (it.roles || []).length ? `（${escapeHtml(it.roles.join("、"))}）` : "";
+      return `<div class="wr-rel"><span class="wr-rel-type">${escapeHtml(creditGroup.title || creditGroup.id || "Credits")}</span><span>${escapeHtml(it.name)}</span>${roles ? `<span class="muted">${roles}</span>` : ""}</div>`;
+    }).join("");
+    return `<div class="wr-credit-group"><div class="wr-credit-head">${escapeHtml(creditGroup.title || creditGroup.id)}</div><div class="wr-rels">${itemsHtml}</div></div>`;
+  };
+  return credits.map((credit) => `<div class="wr-track">
+    <div class="wr-track-head"><strong>${escapeHtml(credit.track || "歌曲")}</strong><a href="${safeHref(credit.source_url || "")}" target="_blank" rel="noreferrer"><code>Apple Music Credits</code></a></div>
+    <div class="wr-credit-groups">${(credit.groups || []).map(groupsHtml).join("")}</div>
+  </div>`).join("") + `<p class="muted">版权方侧数据；在 MusicBrainz 挂 composer / lyricist / producer 关系时逐条核对。角色名随页面语言变化，按原样保留。</p>`;
 }
 
 function renderWorkRelations(wr) {
@@ -311,6 +416,14 @@ function renderWorkRelations(wr) {
   return `${noticeHtml}${creditsSection}${mbSection}${copyHtml}<p class="muted">只查询不建库：MusicBrainz 的编辑需要登录账号；Apple Credits 是版权方页面数据，请在 Add work / 编辑页人工核对后挂载。</p>`;
 }
 
+function renderLyricsCandidates(items) {
+  const rows = items.map((item) => {
+    const links = (item.links || []).map((l) => `<a class="lyric-link" href="${safeHref(l.url)}" target="_blank" rel="noreferrer">${escapeHtml(l.site)}</a>`).join("");
+    return `<div class="lyr-track"><strong>${escapeHtml(item.track)}</strong>${item.artist ? `<span class="muted">— ${escapeHtml(item.artist)}</span>` : ""}<span class="lyr-links">${links}</span></div>`;
+  }).join("");
+  return `<div class="lyr-block"><div class="lyr-title">Lyrics URL relationship 候选（MB 白名单站点，先建好 Work/Recording 再挂）</div>${rows}<p class="muted">MB 的 lyrics relationship 只允许白名单站点（Genius / Musixmatch / LyricsTranslate 及日文歌词站等）；点击进入各站搜索页，确认歌词页后把最终 URL 挂到 Work / Recording 的 lyrics 关系上。</p></div>`;
+}
+
 // 左导航：完成度与待确认项汇总
 function renderRail(report, baseFields = 0) {
   const missing = (report.missing_fields || []).length;
@@ -354,20 +467,24 @@ function renderRail(report, baseFields = 0) {
  * 锚点落点的卡片顶边也会钻进条下。统一改成脚本实测，别再写死数字。
  */
 function syncBarOffset() {
-  const bar = document.querySelector(".reportbar");
-  if (!bar) return;
-  const height = Math.round(bar.getBoundingClientRect().height);
-  // 报告区还带 .hidden 时高度是 0，此时不能把变量写成 0
+  // 专辑 / 单曲两种报告各有一个 .reportbar，同一时间只有一个可见。
+  // 取「可见」的那个的实测高度，避免隐藏栏（高度 0）把变量清掉。
+  const bars = document.querySelectorAll(".reportbar");
+  let height = 0;
+  bars.forEach((bar) => {
+    if (bar.offsetParent === null) return;
+    height = Math.max(height, Math.round(bar.getBoundingClientRect().height));
+  });
   if (!height) return;
   document.documentElement.style.setProperty("--bar-h", `${height}px`);
 }
 
 (function watchBarOffset() {
-  const bar = document.querySelector(".reportbar");
-  if (!bar) return;
+  const bars = document.querySelectorAll(".reportbar");
+  if (!bars.length) return;
   syncBarOffset();
   // 标题改写、按钮换行、字体加载完成都会改变工具栏高度，用 ResizeObserver 盯住
-  if ("ResizeObserver" in window) new ResizeObserver(syncBarOffset).observe(bar);
+  if ("ResizeObserver" in window) bars.forEach((bar) => new ResizeObserver(syncBarOffset).observe(bar));
   window.addEventListener("resize", syncBarOffset);
 })();
 
@@ -612,6 +729,27 @@ $("#copy-external").addEventListener("click", async () => {
   await copyText(text, $("#copy-external"), "复制全部链接");
 });
 
+function songMarkdown(report) {
+  if (report && report.markdown) return report.markdown;
+  // 后端没生成时兜底：极简结构
+  const s = (report || {}).song || {};
+  const lines = [`# ${s.title || "单曲资料"}`, "", `- Artist: ${s.artist || ""}`, `- 所属专辑: ${s.album || ""}`];
+  (report.external_links || []).forEach((item) => lines.push(`- ${item.site}: ${item.url}`));
+  return lines.join("\n") + "\n";
+}
+
+function songFileName(report) {
+  const title = ((report || {}).song || {}).title || "musicbrainz-song";
+  return title.replace(/[^\w\u4e00-\u9fa5-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "musicbrainz-song";
+}
+
+$("#copy-song-markdown").addEventListener("click", async () => {
+  if (!currentReport) return;
+  await copyText(songMarkdown(currentReport), $("#copy-song-markdown"), "复制 Markdown");
+});
+$("#download-song-markdown").addEventListener("click", () => currentReport && download(`${songFileName(currentReport)}.md`, songMarkdown(currentReport), "text/markdown;charset=utf-8"));
+$("#download-song-json").addEventListener("click", () => currentReport && download(`${songFileName(currentReport)}.json`, JSON.stringify(currentReport, null, 2), "application/json;charset=utf-8"));
+
 $("#copy-markdown").addEventListener("click", async () => {
   if (!currentReport) return;
   await copyText(reportMarkdown(currentReport), $("#copy-markdown"), "复制 Markdown");
@@ -641,6 +779,16 @@ $("#copy-annotation").addEventListener("click", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  const toAlbum = event.target.closest(".song-to-album");
+  if (toAlbum) {
+    const url = (toAlbum.dataset.url || "").trim();
+    if (url) {
+      const input = $("#source-urls");
+      if (input) input.value = url;
+      runLookup();
+    }
+    return;
+  }
   const events = event.target.closest(".copy-events");
   if (events) {
     await copyText(events.dataset.events || "", events, events.textContent);
