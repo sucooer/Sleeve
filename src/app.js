@@ -280,6 +280,7 @@ function renderSongReport(report) {
     ["Artist", s.artist],
     ["时长", s.length || "未确认"],
     ["ISRC", s.isrc || "未确认"],
+    ["ISWC", s.iswc || "未确认"],
     ["发行日期", s.release_date || "未确认"],
     ["类型", s.genre || "未确认"],
   ];
@@ -915,5 +916,26 @@ $(".brand").addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
 });
 
+// 数据源用量小徽标（右下角）：Soundcharts 配额余量。
+// 只在配了 Soundcharts 且用量可查时显示；未配置、查询失败或用量格式异常都静默隐藏。
+// 跟随 apiFetch 的鉴权：开了 SLEEVE_AUTH 时凭据失效会自动弹回登录层。
+async function loadUsageBadge() {
+  const badge = $("#usage-badge");
+  if (!badge) return;
+  try {
+    const response = await apiFetch("/api/usage", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    const sc = data.sources && data.sources.soundcharts;
+    if (!sc || !sc.configured || !sc.usage || !sc.usage.quota) return;
+    const { remaining, limit } = sc.usage.quota;
+    if (typeof remaining !== "number" || typeof limit !== "number") return;
+    badge.textContent = `Soundcharts 配额 ${remaining}/${limit}`;
+    badge.classList.toggle("usage-low", limit > 0 && remaining / limit < 0.2);
+    badge.classList.remove("hidden");
+  } catch (error) { /* 用量显示失败不打扰主流程 */ }
+}
+
 // 启动认证检查（放在文件末尾：$ 与 DOM 都已就绪）。
-initAuth();
+// 用量徽标在认证流程走完后一并加载（未登录时 401 会由 apiFetch 弹回登录层）。
+initAuth().finally(loadUsageBadge);

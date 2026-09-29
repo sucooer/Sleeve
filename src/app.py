@@ -738,6 +738,239 @@ def detect_song_url(url: str) -> dict[str, str]:
     return {}
 
 
+SONOVAULT_BASE = "https://api.sonovault.now"
+SONOVAULT_API_KEY = os.environ.get("SONOVAULT_API_KEY", "").strip()
+
+
+def sonovault_track_search(title: str, artist: str) -> dict[str, Any]:
+    """Sonovault 免费 API：按艺人+标题补查 ISRC / ISWC（93M 录音目录）。
+
+    只对曲库收录的歌有效：英文/主流歌命中率高；CJK 原文标题不索引（罗马字
+    标题可命中）。未配置 SONOVAULT_API_KEY 或查询无匹配时返回 {}。
+    免费档限速 20 req/min；单曲报告只查一次，不会触发。
+    """
+    if not SONOVAULT_API_KEY or not title or not artist:
+        return {}
+    params = {"artist": artist, "title": title, "limit": "5"}
+    query_string = "&".join(f"{quote(key)}={quote(value)}" for key, value in params.items())
+    data = fetch_json(f"{SONOVAULT_BASE}/v1/tracks/search?{query_string}", headers={"x-api-key": SONOVAULT_API_KEY})
+    items = data.get("results") if isinstance(data, dict) else None
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        found_title = first(item.get("title"))
+        if not found_title:
+            continue
+        # 剥掉尾部括号变体（(loop) / (remix) / (instrumental) / (feat. …)）再匹配，
+        # 避免把别的版本的 ISRC 误补到这首歌上
+        base_title = re.sub(r"\s*\([^)]*\)\s*$", "", found_title).strip()
+        if not base_title or not title_is_related(base_title, title):
+            continue
+        # 标题匹配上了但这条没有任何标识码（loop / 无元数据变体）就继续看下一条
+        if not item.get("isrc") and not item.get("iswc"):
+            continue
+        return {
+            "isrc": clean_value(item.get("isrc")),
+            "iswc": clean_value(item.get("iswc")),
+            "title": found_title,
+            "artists": [first(a.get("name")) for a in item.get("artists") or [] if isinstance(a, dict) and first(a.get("name"))],
+            "duration": item.get("duration"),
+            "source_url": f"https://sonovault.now/track/{item.get('id')}" if item.get("id") else "",
+        }
+    return {}
+
+
+# ---- Soundcharts 可选集成（ISRC / ISWC 补查的第二数据源）----
+#    认证二选一：OAuth client_credentials（推荐：SOUNDCHARTS_CLIENT_ID / SECRET，
+#    Soundcharts 控制台创建 API Client 后可得）或 legacy x-app-id / x-api-key
+#    （含公开沙箱 soundcharts / soundcharts）。凭据只从环境变量读取，绝不落盘、
+#    不入库、不写日志；两种认证都不配置时整个 Soundcharts 补查静默跳过，零侵入。
+#    查询走「按平台曲目 ID 直查」端点（/api/v2.25/song/by-platform/{platform}/{id}），
+#    不依赖其标了 internal-use-only 的 search 端点，适合对外的 Sleeve。
+SOUNDCHARTS_BASE = "https://customer.api.soundcharts.com"
+SOUNDCHARTS_TOKEN_URL = "https://account.soundcharts.com/oauth/token"
+SOUNDCHARTS_CLIENT_ID = os.environ.get("SOUNDCHARTS_CLIENT_ID", "").strip()
+SOUNDCHARTS_CLIENT_SECRET = os.environ.get("SOUNDCHARTS_CLIENT_SECRET", "").strip()
+SOUNDCHARTS_APP_ID = os.environ.get("SOUNDCHARTS_APP_ID", "").strip()
+SOUNDCHARTS_API_KEY = os.environ.get("SOUNDCHARTS_API_KEY", "").strip()
+SOUNDCHARTS_PLATFORMS = {"apple": "itunes", "spotify": "spotify", "deezer": "deezer"}
+SOUNDCHARTS_TOKEN_CACHE: dict[str, Any] = {}
+
+
+def soundcharts_configured() -> bool:
+    """两种认证方式任配其一即启用；全空则 Soundcharts 补查完全跳过。"""
+    return bool(
+        (SOUNDCHARTS_CLIENT_ID and SOUNDCHARTS_CLIENT_SECRET)
+        or (SOUNDCHARTS_APP_ID and SOUNDCHARTS_API_KEY)
+    )
+
+
+def _soundcharts_oauth_token() -> str:
+    """client_credentials 换 bearer token（默认 3600s 有效），进程内缓存、失败静默。"""
+    cached = SOUNDCHARTS_TOKEN_CACHE.get("token") or ""
+    if cached and SOUNDCHARTS_TOKEN_CACHE.get("expires_at", 0) > time.time() + 60:
+        return cached
+    if not (SOUNDCHARTS_CLIENT_ID and SOUNDCHARTS_CLIENT_SECRET):
+        return ""
+    basic = "Basic " + base64.b64encode(
+        f"{SOUNDCHARTS_CLIENT_ID}:{SOUNDCHARTS_CLIENT_SECRET}".encode("utf-8")
+    ).decode("ascii")
+    try:
+        req = Request(
+            SOUNDCHARTS_TOKEN_URL,
+            data=b"grant_type=client_credentials",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": basic,
+            },
+            method="POST",
+        )
+        with GUARDED_OPENER.open(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        token = payload.get("access_token") if isinstance(payload, dict) else ""
+        expires_in = int(payload.get("expires_in") or 3600) if isinstance(payload, dict) else 3600
+        if token:
+            SOUNDCHARTS_TOKEN_CACHE.update(token=token, expires_at=time.time() + expires_in)
+        return token
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return ""
+
+
+def soundcharts_auth_headers() -> dict[str, str]:
+    """优先 OAuth bearer；无 OAuth 凭据或换 token 失败时退回 legacy headers。"""
+    token = _soundcharts_oauth_token()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    headers: dict[str, str] = {}
+    if SOUNDCHARTS_APP_ID:
+        headers["x-app-id"] = SOUNDCHARTS_APP_ID
+    if SOUNDCHARTS_API_KEY:
+        headers["x-api-key"] = SOUNDCHARTS_API_KEY
+    return headers
+
+
+def soundcharts_song_by_platform_id(source: str, track_id: str) -> dict[str, Any]:
+    """Soundcharts API：按平台曲目 ID 直查歌曲元数据（ISRC / ISWC / 溯源链接）。
+
+    不配置凭据、来源不在 apple/spotify/deezer、曲目未收录（404）或查询无匹配时
+    返回 {}；凭据 / 计划 / 网络等错误向上抛 FetchError，由调用方决定提示还是静默。
+    平台代码映射：apple→itunes（Apple Music 歌单才是 apple-music，歌曲用 itunes）、
+    spotify、deezer；响应兼容 single-object envelope（{object: …}）与裸对象两种形态。
+    """
+    if not soundcharts_configured() or not track_id:
+        return {}
+    platform = SOUNDCHARTS_PLATFORMS.get(source or "")
+    if not platform:
+        return {}
+    headers = soundcharts_auth_headers()
+    if not headers:
+        return {}
+    try:
+        data = fetch_json(
+            f"{SOUNDCHARTS_BASE}/api/v2.25/song/by-platform/{quote(platform)}/{quote(track_id)}",
+            headers=headers,
+        )
+    except FetchError as exc:
+        # 404 = 曲库未收录，是正常结果，静默降级；其余错误（401/403/网络）继续抛
+        if "404" in str(exc):
+            return {}
+        raise
+    obj = data.get("object") if isinstance(data, dict) and "object" in data else data
+    if not isinstance(obj, dict) or not obj.get("uuid"):
+        return {}
+    isrc = obj.get("isrc") if isinstance(obj.get("isrc"), dict) else {}
+    iswcs = obj.get("iswcs") or []
+    return {
+        "isrc": clean_value(isrc.get("value")),
+        "iswc": " / ".join(clean_value(code) for code in iswcs if clean_value(code)),
+        "title": first(obj.get("name")),
+        "artists": [
+            first(a.get("name"))
+            for a in (obj.get("mainArtists") or obj.get("artists") or [])
+            if isinstance(a, dict) and first(a.get("name"))
+        ],
+        "duration": obj.get("duration"),
+        "source_url": first(obj.get("appUrl")) or f"https://soundcharts.com/app/song/{obj.get('uuid')}",
+    }
+
+
+def soundcharts_team_usage() -> dict[str, Any]:
+    """GET /api/v2/team/usage：Soundcharts 配额与实时限速。
+
+    不配置凭据返回 {}；网络 / 4xx 等错误抛 FetchError。刻意不走 fetch_json，
+    避免出网缓存把用量卡在旧值（用量要实时）。仍过 check_outbound 出网闸。
+    """
+    if not soundcharts_configured():
+        return {}
+    headers = soundcharts_auth_headers()
+    if not headers:
+        return {}
+    url = f"{SOUNDCHARTS_BASE}/api/v2/team/usage"
+    check_outbound(url)
+    req = Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            **headers,
+        },
+    )
+    try:
+        with GUARDED_OPENER.open(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        raise FetchError(str(exc)) from exc
+    obj = payload.get("object") if isinstance(payload, dict) and "object" in payload else payload
+    if not isinstance(obj, dict):
+        return {}
+    quota = obj.get("quota") if isinstance(obj.get("quota"), dict) else {}
+    rate = obj.get("rateLimit") if isinstance(obj.get("rateLimit"), dict) else {}
+    return {
+        "quota": {
+            "limit": quota.get("limit"),
+            "used": quota.get("used"),
+            "remaining": quota.get("remaining"),
+            "period": quota.get("period"),
+            "end_period_date": quota.get("endPeriodDate"),
+        },
+        "rate_limit": {
+            "limit_per_minute": rate.get("limitPerMinute"),
+            "used": rate.get("used"),
+            "remaining": rate.get("remaining"),
+            "reset_in_seconds": rate.get("resetInSeconds"),
+        },
+    }
+
+
+def collect_usage_status() -> dict[str, Any]:
+    """/api/usage 用：汇总两个 ISRC 补查数据源的配置与用量状态。"""
+    sources: dict[str, Any] = {}
+    # Sonovault：没有用量查询 API，只报配置状态与限速策略（实时余量在响应头里）
+    sources["sonovault"] = {
+        "configured": bool(SONOVAULT_API_KEY),
+        "usage_api": False,
+        "note": "无用量查询接口；免费档限速 20 req/min，实时剩余次数见响应头 ratelimit-remaining",
+    }
+    # Soundcharts：有 /team/usage 配额端点，实时查询
+    sc: dict[str, Any] = {
+        "configured": bool(soundcharts_configured()),
+        "usage_api": True,
+    }
+    if sc["configured"]:
+        sc["auth"] = "oauth" if (SOUNDCHARTS_CLIENT_ID and SOUNDCHARTS_CLIENT_SECRET) else "legacy"
+        try:
+            sc["usage"] = soundcharts_team_usage()
+        except FetchError as exc:
+            sc["error"] = str(exc)
+    sources["soundcharts"] = sc
+    return {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "sources": sources,
+    }
+
+
 def deezer_track(track_id: str) -> dict[str, Any]:
     """Deezer 公开 API 的 /track/<id>：单曲的 isrc / 所属专辑 / 时长 / 发行日期一次拿齐。"""
     data = fetch_json(f"{DEEZER_BASE}/track/{quote(track_id)}")
@@ -2759,6 +2992,7 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
                     "track_url": first(track.get("trackViewUrl")).split("&uo=")[0],
                     "length": format_duration(track.get("trackTimeMillis")),
                     "isrc": clean_value(track.get("isrc")),
+                    "iswc": "",
                     "release_date": iso_date(track.get("releaseDate")),
                     "genre": first(track.get("primaryGenreName")),
                     "copyright": clean_value(track.get("copyright")),
@@ -2781,6 +3015,7 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
                     "track_url": data["url"],
                     "length": data["length"],
                     "isrc": clean_value(data["isrc"]),
+                    "iswc": "",
                     "release_date": data["date"],
                     "genre": "",
                     "artwork_url": data["image"],
@@ -2802,6 +3037,7 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
                     "track_url": data["url"],
                     "length": data["length"],
                     "isrc": clean_value(data["isrc"]),
+                    "iswc": "",
                     "release_date": data["date"],
                     "genre": "",
                     "artwork_url": data["image"],
@@ -2816,6 +3052,36 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
             "reason": f"无法解析该单曲链接（{platform_label} 查不到这首歌）。请确认链接有效，或改用专辑 / 播放列表链接。",
             "query": {"album_name": album_name, "artist_name": artist_name},
         }
+
+    # ---- 1.5 Sonovault / Soundcharts 补 ISRC / ISWC（可选：配置对应环境变量后生效）----
+    #    平台没给 ISRC（主要是 Spotify 代理）时，先用 Sonovault 免费 API 交叉引用补；
+    #    Sonovault 未命中（曲库未收录 / CJK 标题不索引）且单曲来源是 apple/spotify/deezer
+    #    时，再用 Soundcharts 按平台曲目 ID 直查（不依赖模糊搜索，更精确）。
+    #    两边都搜不到就静默，不制造噪音；平台已给的 ISRC 绝不覆盖。
+    if not song.get("isrc"):
+        try:
+            sv = sonovault_track_search(song.get("title") or "", song.get("artist") or "")
+        except FetchError as exc:
+            sv = {}
+            source_errors.append({"source": "Sonovault", "error": f"ISRC 补查失败：{exc}"})
+        if sv:
+            if not song.get("isrc") and sv.get("isrc"):
+                song["isrc"] = sv["isrc"]
+            if sv.get("iswc"):
+                song["iswc"] = sv["iswc"]
+            api_notes.append(f"ISRC 来自 Sonovault 交叉引用（{sv.get('title') or '同名单曲'} · {sv.get('source_url') or 'sonovault.now'}）")
+        elif song_source in SOUNDCHARTS_PLATFORMS:
+            try:
+                sc = soundcharts_song_by_platform_id(song_source, song_id)
+            except FetchError as exc:
+                sc = {}
+                source_warnings.append({"source": "Soundcharts", "warning": f"ISRC 补查失败（可选数据源，已跳过）：{exc}"})
+            if sc:
+                if not song.get("isrc") and sc.get("isrc"):
+                    song["isrc"] = sc["isrc"]
+                if sc.get("iswc"):
+                    song["iswc"] = sc["iswc"]
+                api_notes.append(f"ISRC 来自 Soundcharts 交叉引用（{sc.get('title') or '同名单曲'} · {sc.get('source_url') or 'soundcharts.com'}）")
 
     # ---- 2. MusicBrainz recording 搜索（歌名 + 艺人）----
     recording: dict[str, Any] = {}
@@ -2947,7 +3213,7 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
     checklist.append({"label": "ISRC / ISWC 原则", "reason": "ISRC 以发行侧数据为准；ISWC 查不到就留空，不要从别的歌曲复制。"})
 
     edit_notes: dict[str, str] = {}
-    dl = "、".join(item for item in [song.get("length"), f"ISRC {song['isrc']}" if song.get("isrc") else "", f"发行于 {song.get('release_date')}" if song.get("release_date") else ""] if item)
+    dl = "、".join(item for item in [song.get("length"), f"ISRC {song['isrc']}" if song.get("isrc") else "", f"ISWC {song['iswc']}" if song.get("iswc") else "", f"发行于 {song.get('release_date')}" if song.get("release_date") else ""] if item)
     disambig_notes = []
     if recording.get("mbid"):
         disambig_notes.append(f"现有 recording：{recording['url']}")
@@ -2985,6 +3251,7 @@ def song_report_markdown(song: dict[str, Any], recording: dict[str, Any], work_r
         f"- Artist: {first(song.get('artist'))}",
         f"- 时长: {first(song.get('length')) or '未确认'}",
         f"- ISRC: {first(song.get('isrc')) or '未确认'}",
+        f"- ISWC: {first(song.get('iswc')) or '未确认'}",
         f"- 所属专辑: {first(song.get('album')) or '未确认'}（{first(song.get('album_url')) or '无链接'}）",
         f"- 发行日期: {first(song.get('release_date')) or '未确认'}",
         f"- 类型: {first(song.get('genre')) or '未确认'}",
@@ -3745,6 +4012,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "service": "Sleeve", "version": VERSION, "auth": bool(AUTH_HEADER), "auth_ttl": AUTH_TTL})
             return
         route = urlparse(self.path).path
+
+        # ISRC 补查数据源用量（Sonovault 配置状态 / Soundcharts 配额实时查询）。
+        # 跟随 /api/* 鉴权与限流（不豁免），避免暴露「配了哪些上游」给未认证访客。
+        if route == "/api/usage":
+            try:
+                self.send_json(collect_usage_status())
+            except Exception as exc:
+                self.send_internal_error("用量查询", exc)
+            return
 
         # 前端脚本与样式：路径取自写死的白名单，不拼接任何用户输入。
         frontend = FRONTEND_ASSETS.get(route)
