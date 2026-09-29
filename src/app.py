@@ -683,12 +683,25 @@ def collect_apple_credits(url: str, track_title: str = "") -> dict[str, Any]:
     """抓取 Apple 歌曲页并解析 Credits。不是歌曲页 / 页面无 Credits 时返回 {}。
 
     失败不抛异常（页面暂时抓不到时由调用方记一条 source_warning）。
+
+    注意：Apple 的专辑展开页（album/…?i=<trackId>）只渲染 tracklist 和推荐，
+    不渲染 Credits 区块；词曲/制作 credits 只在歌曲页（/song/<trackId>）出现。
+    所以专辑展开页进来时改抓对应歌曲页（保留 storefront 段）。
     """
     if not url or "apple.com" not in urlparse(url or "").netloc.lower():
         return {}
+    parsed = urlparse(url)
     # 只处理具体曲目页：/song/ 路径，或专辑页带 ?i=<trackId> 的展开
-    if "/song/" not in url and "i=" not in urlparse(url).query:
+    if "/song/" not in parsed.path and "i=" not in parsed.query:
         return {}
+    # 专辑展开页 → 歌曲页：/us/album/<slug>/<albumId>?i=<trackId> → /us/song/<trackId>
+    if "/song/" not in parsed.path:
+        track_id = parse_qs(parsed.query).get("i", [""])[0]
+        if not track_id:
+            return {}
+        m = re.match(r"^/([a-z]{2})/album/", parsed.path)
+        storefront = m.group(1) if m else ""
+        url = f"https://music.apple.com/{storefront}/song/{track_id}" if storefront else f"https://music.apple.com/song/{track_id}"
     try:
         html = fetch_text(url)
     except FetchError:

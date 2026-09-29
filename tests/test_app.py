@@ -855,6 +855,16 @@ def test_parse_apple_credits_extracts_groups():
     assert by_id["production-and-engineering"]["items"][0]["roles"] == ["混音工程师"]
 
 
+def test_collect_apple_credits_rewrites_album_expansion_to_song_page(monkeypatch):
+    """专辑展开页（album/…?i=<trackId>）不渲染 Credits，应改抓对应歌曲页。"""
+    seen: list[str] = []
+    monkeypatch.setattr(app, "fetch_text", lambda url: seen.append(url) or APPLE_CREDITS_HTML)
+    result = app.collect_apple_credits(
+        "https://music.apple.com/cn/album/some-album/1234567890?i=6814997402", "The Fate of Ophelia")
+    assert seen == ["https://music.apple.com/cn/song/6814997402"]
+    assert len(result["groups"]) == 3
+
+
 def test_parse_apple_credits_empty_on_no_sections():
     assert app.parse_apple_credits("<html></html>") == []
     assert app.parse_apple_credits("") == []
