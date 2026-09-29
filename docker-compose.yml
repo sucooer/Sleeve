@@ -1,14 +1,13 @@
-# Sleeve · 部署（Docker Compose）
+# Sleeve · 部署（Docker Compose，线上镜像）
 #
 #   cp .env.example .env      # 按需改，口令可以留空
-#   docker compose up -d --build
+#   docker compose up -d      # 自动从 ghcr.io/sucooer/sleeve 拉镜像
+#
+# 需要本地构建时（改代码未推镜像等）：docker compose build && docker compose up -d
 
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sleeve:latest
+    image: ghcr.io/sucooer/sleeve:latest
     restart: unless-stopped
     environment:
       SLEEVE_HOST: 0.0.0.0

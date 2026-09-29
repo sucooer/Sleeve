@@ -115,6 +115,10 @@ function setupLoginForm() {
 // 服务不可达时保持登录层可见（页面本来就是遮罩，不会闪出内容）。
 async function initAuth() {
   setupLoginForm();
+  // 本地已有凭据：立刻收起登录层，避免每次刷新都「闪」一下认证窗口
+  // （不用等 /api/health 网络往返）。凭据若已失效，后面的 checkAuthExpiry
+  // 或业务请求 401（apiFetch）会自动清凭据并弹回登录层，安全不回退。
+  if (getStoredAuth()) hideLogin();
   let authEnabled = true;
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
