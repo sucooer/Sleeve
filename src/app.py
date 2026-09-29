@@ -601,6 +601,108 @@ def extract_apple_id(url: str) -> str:
     return parse_qs(parsed.query).get("i", [""])[0]
 
 
+def extract_apple_song_id(url: str) -> str:
+    """单曲链接（music.apple.com/.../song/.../<数字>）里的 trackId。
+
+    单曲 ID 是 trackId 而不是 collectionId，不能直接当专辑 ID 用；
+    主流程拿到它之后先 itunes_album_from_song() 转成所属专辑再走专辑查询。
+    """
+    if "apple.com" not in urlparse(url or "").netloc.lower():
+        return ""
+    match = re.search(r"/song/(?:[^/?]+/)?(\d+)(?:[/?]|$)", url or "", re.I)
+    if match:
+        return match.group(1)
+    parsed = urlparse(url or "")
+    return parse_qs(parsed.query).get("i", [""])[0]
+
+
+def itunes_album_from_song(track_id: str) -> dict[str, Any]:
+    """单曲 ID → 所属专辑。lookup 返回 wrapperType=track，取 collectionId 反查专辑。
+
+    完全查不到（链接失效 / 不是真实曲目）时返回 {}。
+    """
+    data = fetch_json(f"https://itunes.apple.com/lookup?id={quote(track_id)}&entity=song&limit=1")
+    track = next((item for item in data.get("results") or [] if item.get("wrapperType") == "track"), {})
+    collection_id = str(track.get("collectionId") or "")
+    if not collection_id:
+        return {}
+    return {
+        "collection_id": collection_id,
+        "collection_name": first(track.get("collectionName")),
+        "track_name": first(track.get("trackName")),
+        "artist": first(track.get("artistName")),
+        "url": normalize_mb_url(urljoin("https://music.apple.com", first(track.get("collectionViewUrl")))),
+    }
+
+
+CREDIT_SECTION_KEYS = ("performer", "composer-and-lyrics", "production-and-engineering")
+
+
+def parse_apple_credits(html: str) -> list[dict[str, Any]]:
+    """从 Apple Music 歌曲页面 HTML 里解析 Credits 区块。
+
+    页面内嵌 JSON（window 数据）里有 sections：
+      - performer：出演艺人（含乐器/声部 roleNames，如 声乐 / 钢琴 / 编程）
+      - composer-and-lyrics：作曲和作词（词曲作者）
+      - production-and-engineering：制作和工程（制作 / 混音 / 母带 / 工程师等）
+
+    这是**版权方侧**的 credits 数据，MB 上有没有这张专辑、有没有 work 都照常可用，
+    是新建 Work / Recording 时挂 relationship 的直接参考。
+    角色名与区块标题随页面 locale 变化（中文：词曲作者；英文：songwriter），按原样保留。
+    """
+    if not html:
+        return []
+    match = re.search(r'"sections":(\[)', html)
+    if not match:
+        return []
+    try:
+        decoder = json.JSONDecoder()
+        sections, _ = decoder.raw_decode(html[match.start() + len('"sections":'):])
+    except (ValueError, json.JSONDecodeError):
+        return []
+    groups: list[dict[str, Any]] = []
+    for section in sections or []:
+        section_id = section.get("id") or ""
+        if section_id not in CREDIT_SECTION_KEYS:
+            continue
+        items = []
+        for item in section.get("items") or []:
+            name = first(item.get("name"))
+            if not name:
+                continue
+            items.append({
+                "name": name,
+                "roles": [first(role) for role in item.get("roleNames") or [] if first(role)] or [],
+            })
+        if items:
+            groups.append({"id": section_id, "title": first(section.get("title")) or section_id, "items": items})
+    return groups
+
+
+def collect_apple_credits(url: str, track_title: str = "") -> dict[str, Any]:
+    """抓取 Apple 歌曲页并解析 Credits。不是歌曲页 / 页面无 Credits 时返回 {}。
+
+    失败不抛异常（页面暂时抓不到时由调用方记一条 source_warning）。
+    """
+    if not url or "apple.com" not in urlparse(url or "").netloc.lower():
+        return {}
+    # 只处理具体曲目页：/song/ 路径，或专辑页带 ?i=<trackId> 的展开
+    if "/song/" not in url and "i=" not in urlparse(url).query:
+        return {}
+    try:
+        html = fetch_text(url)
+    except FetchError:
+        return {}
+    groups = parse_apple_credits(html)
+    if not groups:
+        return {}
+    return {
+        "track": track_title or "",
+        "source_url": url,
+        "groups": groups,
+    }
+
+
 def extract_spotify_id(url: str) -> str:
     match = re.search(r"open\.spotify\.com/(?:intl-[a-z-]+/)?album/([A-Za-z0-9]{22})", url or "", re.I)
     return match.group(1) if match else ""
@@ -1701,6 +1803,183 @@ def mb_tracks(release: dict[str, Any]) -> list[dict[str, Any]]:
     return tracks
 
 
+# ---------------------------------------------------------------------------
+# Work relationships：只查询、只展示；建库（建 Work / 挂关系）由人工在 MusicBrainz 完成
+# ---------------------------------------------------------------------------
+
+MAX_WORK_RELS_TRACKS = 40   # 单次报告最多查询这么多首曲的 recording（每首 1 次 + 其 work 各 1 次）
+MAX_WORK_RELS_WORKS = 6     # 单曲最多展开这么多个 work 的 artist 关系，多的提示人工
+
+
+def mb_work_relation_artist(rel: dict[str, Any]) -> dict[str, Any]:
+    """把一条 artist 型关系压成前端好渲染的扁平结构。"""
+    artist = rel.get("artist") or {}
+    return {
+        "type": first(rel.get("type")),
+        "artist": first(artist.get("name")),
+        "artist_mbid": first(artist.get("id")),
+        "attributes": [first(a.get("name")) for a in rel.get("attributes") or [] if isinstance(a, dict)] or [],
+    }
+
+
+def mb_work_rels_for_recording(recording_mbid: str) -> dict[str, Any]:
+    """查一个 recording 关联的 work 与关系。
+
+    MB 数据模型：recording 通过 performance 关系指向 work；作词 / 作曲 / 编曲等
+    大多挂在 work 的 artist-rels 上（少数也直接挂在 recording 上）。这里两步：
+      1. recording?inc=artist-rels+work-rels       拿 work 列表 + recording 直接关系；
+      2. 对每个 work 再查 work/{id}?inc=artist-rels 拿 work 级 composer/lyricist 等。
+
+    每次调用会打 1 + len(works) 个请求，受 mb_request 的 1 req/s 限速约束。
+    """
+    data = mb_request(f"recording/{recording_mbid}", {"inc": "artist-rels+work-rels", "fmt": "json"})
+    works: list[dict[str, Any]] = []
+    recording_relations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for rel in data.get("relations") or []:
+        if rel.get("direction") not in (None, "forward"):
+            continue
+        if rel.get("target-type") == "work":
+            work = rel.get("work") or {}
+            work_id = first(work.get("id"))
+            if not work_id or work_id in seen:
+                continue
+            seen.add(work_id)
+            works.append({
+                "title": first(work.get("title")),
+                "mbid": work_id,
+                "type": first(work.get("type")),
+                "iswc": clean_value(work.get("iswc")),
+                "url": f"https://musicbrainz.org/work/{work_id}",
+                "relations": [],
+            })
+        elif rel.get("target-type") == "artist":
+            recording_relations.append(mb_work_relation_artist(rel))
+    for work in works[:MAX_WORK_RELS_WORKS]:
+        try:
+            work_data = mb_request(f"work/{work['mbid']}", {"inc": "artist-rels", "fmt": "json"})
+        except FetchError:
+            continue
+        relations: list[dict[str, Any]] = []
+        for rel in work_data.get("relations") or []:
+            if rel.get("direction") in (None, "forward") and rel.get("target-type") == "artist":
+                relations.append(mb_work_relation_artist(rel))
+        work["relations"] = relations
+    return {"works": works, "recording_relations": recording_relations}
+
+
+def build_work_relations(tracks: list[dict[str, Any]], apple_credits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """逐轨查询 MusicBrainz 的 work relationships，并合并 Apple 页面 Credits，产出报告区块数据。
+
+    用途是给「新建/核对 Work 与 Recording 关系」人工操作当参考：
+      - apple_credits：Apple Music 页面 Credits（作曲/作词/制作/表演），**不依赖 MB**，
+        即使 MB 尚无该发行也照常给出 —— 这正是建一个「MB 里还不存在的 work」时需要的资料；
+      - MB 查询：仅当本发行匹配到 MB 且曲目有 recording_mbid 时执行，展示现有关联供核对。
+
+    只查询、绝不提交：MusicBrainz 的编辑必须登录账号由人工完成。查失败不阻塞报告。
+    """
+    apple_credits = apple_credits or []
+    recorded = [track for track in tracks if track.get("recording_mbid")]
+    if not recorded:
+        if apple_credits:
+            return {
+                "status": "credits_only",
+                "notice": "MB 尚无此曲目的 recording（或本发行未匹配到 MusicBrainz），无法查现有关联；已从 Apple Music 页面抓到 Credits，可直接作为新建 Work / Recording 时挂 relationship 的依据。",
+                "items": [], "query_count": 0, "failed": 0, "limited": 0,
+                "work_count": 0, "relation_count": 0,
+                "apple_credits": apple_credits,
+                "markdown": work_relations_markdown([], apple_credits),
+            }
+        return {
+            "status": "skipped",
+            "notice": "没有可查询的 recording：本发行未匹配到 MusicBrainz，且 Apple 页面也没有抓到该曲目的 Credits。先建好 Release / 补贴歌曲页链接后再来。",
+            "items": [], "query_count": 0, "failed": 0, "limited": 0,
+            "work_count": 0, "relation_count": 0, "apple_credits": [],
+            "markdown": "",
+        }
+    items: list[dict[str, Any]] = []
+    queried = 0
+    failed = 0
+    limited = 0
+    for track in recorded:
+        if queried >= MAX_WORK_RELS_TRACKS:
+            limited += 1
+            continue
+        queried += 1
+        entry = {
+            "track": first(track.get("title")),
+            "recording_mbid": track.get("recording_mbid"),
+            "recording_url": f"https://musicbrainz.org/recording/{track.get('recording_mbid')}",
+            "works": [],
+            "recording_relations": [],
+            "error": "",
+        }
+        try:
+            result = mb_work_rels_for_recording(track["recording_mbid"])
+        except FetchError as exc:
+            entry["error"] = str(exc)
+            failed += 1
+            items.append(entry)
+            continue
+        entry["works"] = result["works"]
+        entry["recording_relations"] = result["recording_relations"]
+        items.append(entry)
+    work_count = sum(len(item["works"]) for item in items)
+    relation_count = sum(len(item["works"]) + len(item["recording_relations"]) for item in items)
+    parts = []
+    if items:
+        parts.append(f"已查询 {len(items)} 首曲目的 recording，找到 {work_count} 个 work、{relation_count} 条关系")
+    if failed:
+        parts.append(f"{failed} 首查询失败")
+    if limited:
+        parts.append(f"{limited} 首超出查询预算（单次最多 {MAX_WORK_RELS_TRACKS} 首），请在 MusicBrainz 页面人工确认")
+    status = "ok" if items and not failed and not limited else ("partial" if items else "failed")
+    return {
+        "status": status,
+        "notice": ("；".join(parts) or "没有查到任何 work 关系。") + ("。另有 Apple Music 页面 Credits 一并列出，供交叉核对。" if apple_credits else ""),
+        "items": items,
+        "query_count": queried,
+        "failed": failed,
+        "limited": limited,
+        "work_count": work_count,
+        "relation_count": relation_count,
+        "apple_credits": apple_credits,
+        "markdown": work_relations_markdown(items, apple_credits),
+    }
+
+
+def work_relations_markdown(items: list[dict[str, Any]], apple_credits: list[dict[str, Any]] | None = None) -> str:
+    """把 Apple Credits + MB 现有关联转成可复制进编辑说明的 Markdown。"""
+    lines: list[str] = []
+    for credit in apple_credits or []:
+        lines.append(f"### {credit.get('track') or '(歌曲)'} — Apple Music Credits（来源 {credit.get('source_url') or ''}）")
+        for group in credit.get("groups") or []:
+            lines.append(f"- **{group.get('title') or group.get('id')}**")
+            for item in group.get("items") or []:
+                roles = "、".join(item.get("roles") or [])
+                lines.append(f"  - {item.get('name')}" + (f"（{roles}）" if roles else ""))
+        lines.append("")
+    for item in items:
+        lines.append(f"### {item.get('track') or '(无标题)'} — recording `{item.get('recording_mbid') or ''}`")
+        if item.get("error"):
+            lines.append(f"- 查询失败：{item['error']}")
+            continue
+        for rel in item.get("recording_relations") or []:
+            mbid = f" ({rel.get('artist_mbid')})" if rel.get("artist_mbid") else ""
+            lines.append(f"- (recording) {rel.get('type') or '?'}: {rel.get('artist') or ''}{mbid}")
+        for work in item.get("works") or []:
+            suffix = f" [{work.get('iswc')}]" if work.get("iswc") else ""
+            lines.append(f"- Work: {work.get('title') or '(无标题 work)'} ({work.get('type') or '类型未确认'}){suffix} `{work.get('mbid') or ''}`")
+            for rel in work.get("relations") or []:
+                attr = f"（{', '.join(rel.get('attributes') or [])}）" if rel.get("attributes") else ""
+                mbid = f" ({rel.get('artist_mbid')})" if rel.get("artist_mbid") else ""
+                lines.append(f"  - {rel.get('type') or '?'}: {rel.get('artist') or ''}{attr}{mbid}")
+        if not item.get("works") and not item.get("recording_relations") and not item.get("error"):
+            lines.append("- 无关联 work（建 Work 时注意别与已有同名词条重复）")
+    if not lines:
+        return ""
+    return "\n".join(lines).rstrip() + "\n\n以上为自动查询/抓取结果，必须逐条人工核对后再挂载；ISWC 查不到就留空。"
+
 def mb_release_sites(release_id: str) -> list[str]:
     """这条发行已经挂了哪些平台的链接（只看站点名，用来算「还缺什么」）。"""
     try:
@@ -2320,6 +2599,23 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     page_hint = next((item for item in page_summaries if item.get("status") == "ok" and (item.get("title") or item.get("artist"))), {})
     release_id, release_group_id = extract_mbids(primary_url)
     apple_id = extract_apple_id(primary_url)
+    # 单曲链接：trackId 不是专辑 ID，先 iTunes lookup 定位所属专辑，再走专辑流程
+    # （专辑匹配上 MusicBrainz 后，work relationships 查询才能跟着跑起来）
+    apple_song_album: dict[str, Any] = {}
+    apple_song_id = extract_apple_song_id(primary_url) if not apple_id else ""
+    if apple_song_id:
+        try:
+            apple_song_album = itunes_album_from_song(apple_song_id)
+        except FetchError as exc:
+            source_warnings.append({"source": "Apple/iTunes", "warning": f"单曲链接解析失败：{exc}"})
+        if apple_song_album:
+            apple_id = apple_song_album["collection_id"]
+            sources.append({
+                "name": "Apple 单曲链接",
+                "status": "ok",
+                "url": primary_url,
+                "summary": {"note": f"输入为单曲链接，已按 iTunes lookup 定位到所属专辑《{apple_song_album.get('collection_name')}》（collectionId {apple_song_album.get('collection_id')}），后续以该专辑的数据为准"},
+            })
     spotify_id = next((found for url in source_urls if (found := extract_spotify_id(url))), "")
     spotify_data: dict[str, Any] = {}
     if spotify_id:
@@ -2338,8 +2634,8 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     if deezer_data and not page_hint and deezer_id:
         # 输入就是 Deezer 链接时数据来自 API 而非页面解析，用它顶替 page_hint，避免误报「页面解析失败」
         page_hint = deezer_data
-    title_hint = first(page_hint.get("title")) or first(spotify_data.get("title")) or first(deezer_data.get("title")) or album_name
-    artist_hint = first(page_hint.get("artist")) or artist_name.strip() or first(spotify_data.get("artist")) or first(deezer_data.get("artist"))
+    title_hint = first(page_hint.get("title")) or first(spotify_data.get("title")) or first(deezer_data.get("title")) or album_name or first(apple_song_album.get("collection_name"))
+    artist_hint = first(page_hint.get("artist")) or artist_name.strip() or first(spotify_data.get("artist")) or first(deezer_data.get("artist")) or first(apple_song_album.get("artist"))
 
     apple_url_country = next((extract_apple_country(url) for url in source_urls if extract_apple_country(url)), "")
     # 默认按链接自带的区；apple_id 分支里查到数据后按实际数据来源区更新（整单切换后可能不再是链接区）
@@ -2528,6 +2824,16 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             "source": "ISRC",
             "warning": f"{len(empty_isrc_tracks)} 轨 ISRC 未补齐：来源里有 ISRC，但碟-轨号与当前曲目表没对上，请人工核对后再填（宁可留空，也不猜）",
         })
+    # Apple Music 页面 Credits：作曲/作词/制作/表演 —— 版权方侧数据，不依赖 MB，
+    # 建一个「MB 里还不存在的 work」时正是靠它挂 relationship。
+    apple_credits: list[dict[str, Any]] = []
+    if apple_song_album.get("track_name"):
+        credit = collect_apple_credits(primary_url, apple_song_album.get("track_name"))
+        if credit:
+            apple_credits.append(credit)
+    # Work relationships：逐轨查询 MusicBrainz 的 work / composer / lyricist 关系。
+    # 只查询展示，建库（建 Work、挂关系）由人工在 MusicBrainz 完成。
+    work_relations = build_work_relations(tracks, apple_credits)
     date = first(mb_data.get("date")) or first(page_hint.get("date")) or first(spotify_data.get("date")) or first(apple_data.get("date")) or first(deezer_data.get("date"))
     language, script = language_script(title, tracks, apple_url_country)
     is_compilation, compilation_note = likely_compilation(title, [apple_data, mb_data, deezer_data])
@@ -2756,6 +3062,20 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
         missing_fields.append({"field": "Release MBID", "hint": "MusicBrainz 里还没有这张发行，需要先人工建 Release"})
     if not page_label and not first(mb_data.get("label")) and not derived_imprint and not spotify_label:
         missing_fields.append({"field": "Label / imprint", "hint": "平台只给了版权方，厂牌（imprint）需要人工确认"})
+    if work_relations["items"]:
+        work_review_reason = (
+            f"已自动查询 {work_relations['query_count']} 首曲目，找到 {work_relations['work_count']} 个 work / {work_relations['relation_count']} 条关系，人工核对后挂载；"
+            + (f"{work_relations['failed']} 首查询失败、{work_relations['limited']} 首超出查询预算未查，请在 MusicBrainz 页面人工确认。"
+               if work_relations["failed"] or work_relations["limited"]
+               else "另有 Apple 页面 Credits 可交叉核对。")
+        )
+    elif work_relations.get("apple_credits"):
+        work_review_reason = "MB 尚无此曲目的 work/recording：下列 Apple Music Credits（作曲/作词/制作/表演）可直接作为新建 Work 与 Recording 关系挂载的依据，挂载前人工核对。"
+    else:
+        work_review_reason = "自动查询到的 credits 需要挂到正确的 Work 或 Recording。"
+    work_edit_note = f"Work/recording credit follow-up for {title}.\n\nUse only credits confirmed by the linked official or authorized source. Leave ISWC and collecting-society IDs blank when they cannot be verified."
+    if work_relations["markdown"]:
+        work_edit_note += "\n\n" + work_relations["markdown"]
     report = {
         "input": {"album_name": album_name, "url": primary_url, "urls": source_urls, "apple_id": apple_id, "deezer_id": deezer_id, "musicbrainz_release_id": release_id, "musicbrainz_release_group_id": release_group_id},
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -2788,6 +3108,7 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             "musicbrainz_release_group_mbid": first(mb_data.get("release_group_mbid")),
         },
         "tracks": tracks,
+        "work_relations": work_relations,
         "sources": sources,
         "missing_fields": missing_fields,
         "duplicates": duplicates,
@@ -2812,18 +3133,19 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             {"key": "label_imprint", "label": "确认 Label 是 imprint 而非版权公司", "reason": "平台显示的版权方不一定等于 MusicBrainz 的厂牌字段。"},
             {"key": "artist_credits", "label": "逐轨检查 feat. / artist credit", "reason": "feat. 应放 Artist Credit，不要写入曲名；不要误改全专辑。"},
             {"key": "recordings", "label": "逐轨确认是否复用已有 Recording", "reason": "同艺人、同标题、时长吻合才复用；拿不准宁可新建。"},
-            {"key": "works", "label": "补 Work、作词/作曲和制作关系", "reason": "自动查询到的 credits 需要挂到正确的 Work 或 Recording。"},
+            {"key": "works", "label": "补 Work、作词/作曲和制作关系", "reason": work_review_reason},
             {"key": "iswc", "label": "ISWC / 著作权登记号", "reason": "查不到就留空，不要从别的歌曲复制。"},
             {"key": "cover", "label": "确认封面是该数字发行的原图", "reason": "禁止 AI 放大、裁剪、加水印或使用粉丝制作图。"},
         ],
         "edit_notes": {
             "release": f"Digital release preparation for {title} by {artist}.\n\nSources:\n" + "\n".join(f"- {item.get('url')}" for item in sources if item.get("url")) + "\n\nAutomatically collected fields require manual verification before submission. Barcode was left blank when no reliable public value was found.",
-            "work": f"Work/recording credit follow-up for {title}.\n\nUse only credits confirmed by the linked official or authorized source. Leave ISWC and collecting-society IDs blank when they cannot be verified.",
+            "work": work_edit_note,
             "cover": f"Front cover taken from the release's own digital artwork source (unmodified):\n{artwork_url}" if artwork_url else "Front cover source still needs to be confirmed.",
         },
         "api_notes": [
             "MusicBrainz read API requires a meaningful User-Agent and should be throttled to no more than one request per second per application.",
             "This tool only prepares data; it does not submit edits to MusicBrainz.",
+            *([] if not work_relations["query_count"] else [f"Work relationships: queried {work_relations['query_count']} recordings ({work_relations['failed']} failed, {work_relations['limited']} over budget). Read-only; manual MB editing required."]),
             *([cache_hit_note()] if cache_hit_note() else []),
         ],
     }

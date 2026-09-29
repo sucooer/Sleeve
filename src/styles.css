@@ -725,6 +725,28 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
 
 /* ---------- 查找入口 / 候选 ---------- */
 .lookup-hint { margin: 0 0 var(--s2); color: var(--ink-5); font-size: 11.5px; line-height: 1.7; }
+/* 发行组命中提示：已匹配到 MusicBrainz 已有发行组，醒目提示复用 */
+.rg-hit {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(87, 242, 135, .08);
+  border: 1px solid rgba(87, 242, 135, .30);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.rg-hit-mark { flex: 0 0 auto; font-size: 13px; line-height: 1.6; }
+.rg-hit strong { color: var(--green); font-weight: 700; }
+.rg-hit code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(87, 242, 135, .12);
+  color: var(--green);
+  font: 600 11px/1.7 var(--mono);
+}
 .lookup-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .lookup-link {
   display: inline-block;
@@ -1235,4 +1257,43 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
   text-align: center;
   font-size: 12px;
   color: var(--ink-6);
+}
+
+/* ============================================================
+   Work relationships（自动查询 MusicBrainz work / composer / lyricist 关系）
+   ============================================================ */
+.work-relations { display: grid; gap: 12px; }
+.wr-track {
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+.wr-track-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wr-track-head strong { margin-right: auto; }
+.wr-track-head code { font-size: 11px; }
+.wr-works { display: grid; gap: 8px; }
+.wr-work {
+  background: rgba(255, 255, 255, .03);
+  border-left: 3px solid rgba(87, 242, 135, .45);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+}
+.wr-work-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wr-work-head strong { font-size: 13.5px; }
+.wr-iswc code { font-size: 11px; }
+.wr-rels { display: grid; gap: 4px; }
+.wr-rel { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; line-height: 1.6; }
+.wr-rel-type {
+  background: rgba(255, 255, 255, .07);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
 }
