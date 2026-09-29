@@ -115,10 +115,8 @@ function setupLoginForm() {
 // 服务不可达时保持登录层可见（页面本来就是遮罩，不会闪出内容）。
 async function initAuth() {
   setupLoginForm();
-  // 本地已有凭据：立刻收起登录层，避免每次刷新都「闪」一下认证窗口
-  // （不用等 /api/health 网络往返）。凭据若已失效，后面的 checkAuthExpiry
-  // 或业务请求 401（apiFetch）会自动清凭据并弹回登录层，安全不回退。
-  if (getStoredAuth()) hideLogin();
+  // 登录层默认隐藏：HTML 首屏由 splash 加载动画接管，等 /api/health 确认
+  // 后才决定「进页面」还是「换登录层」，刷新不再闪现认证窗口。
   let authEnabled = true;
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
@@ -128,7 +126,7 @@ async function initAuth() {
     if (typeof data.auth_ttl === "number") authTtl = data.auth_ttl;
     else if (data.auth) authTtl = AUTH_TTL_FALLBACK;
   } catch (error) { /* 保持默认：视为需要认证 */ }
-  if (!authEnabled) { hideLogin(); return; }
+  if (!authEnabled) { hideLogin(); hideSplash(); return; }
   // 已有凭据但本地没时间戳（旧数据）：记为「刚登录」，从这一刻开始计时
   if (getStoredAuth()) {
     let at = 0;
@@ -140,9 +138,17 @@ async function initAuth() {
   checkAuthExpiry();
   // 到点后即使没有业务请求，也要自动弹回登录层
   setInterval(checkAuthExpiry, 60000);
-  if (!authEnabled || getStoredAuth()) hideLogin();
-  else showLogin();
+  if (getStoredAuth()) {
+    // 凭据有效：收掉加载动画进入页面
+    hideLogin(); hideSplash();
+  } else {
+    // 无凭据，或已过期（expireAuthNow 已清凭据并弹过登录层）：换成登录层
+    hideSplash(); showLogin();
+  }
 }
+
+// 加载动画：HTML 默认显示（首屏），initAuth 完成后收起；之后无需再显示。
+const hideSplash = () => { const el = $("#splash-screen"); if (el) el.classList.add("hidden"); };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
