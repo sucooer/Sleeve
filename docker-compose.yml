@@ -32,6 +32,13 @@ services:
       HTTP_PROXY: ${SLEEVE_OUTBOUND_PROXY:-}
       HTTPS_PROXY: ${SLEEVE_OUTBOUND_PROXY:-}
       NO_PROXY: ${SLEEVE_NO_PROXY:-localhost,127.0.0.1,::1}
+      # ISRC/ISWC 补查数据源凭据：compose 的 .env 只做插值、不会自动进容器，
+      # 必须显式转发（不配则传空串，应用侧自然跳过，零侵入）。
+      SONOVAULT_API_KEY: ${SONOVAULT_API_KEY:-}
+      SOUNDCHARTS_CLIENT_ID: ${SOUNDCHARTS_CLIENT_ID:-}
+      SOUNDCHARTS_CLIENT_SECRET: ${SOUNDCHARTS_CLIENT_SECRET:-}
+      SOUNDCHARTS_APP_ID: ${SOUNDCHARTS_APP_ID:-}
+      SOUNDCHARTS_API_KEY: ${SOUNDCHARTS_API_KEY:-}
     ports:
       - "${SLEEVE_BIND:-127.0.0.1}:${SLEEVE_PUBLISH_PORT:-8765}:8765"
     extra_hosts:
