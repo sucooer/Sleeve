@@ -223,7 +223,7 @@ function renderReport(report) {
   // 艺人解析：别建重名艺人
   const artistCredits = report.artist_credits || [];
   const rgCandidates = report.release_group_candidates || [];
-  const rgNote = report.release.musicbrainz_release_group_mbid ? `<div class="empty">MusicBrainz 已经匹配到发行组 <a href="https://musicbrainz.org/release-group/${escapeHtml(report.release.musicbrainz_release_group_mbid)}" target="_blank" rel="noreferrer">${escapeHtml(report.release.musicbrainz_release_group_mbid)}</a>，直接用它，不要新建。</div>` : "";
+  const rgNote = report.release.musicbrainz_release_group_mbid ? `<div class="rg-hit"><span class="rg-hit-mark">✅</span><span>MusicBrainz 已经匹配到发行组 <a href="https://musicbrainz.org/release-group/${escapeHtml(report.release.musicbrainz_release_group_mbid)}" target="_blank" rel="noreferrer"><code>${escapeHtml(report.release.musicbrainz_release_group_mbid)}</code></a>，直接用它，<strong>不要新建</strong>。</span></div>` : "";
   $("#artist-credits").innerHTML = `<div class="table-wrap"><table><thead><tr><th>名称</th><th>MusicBrainz 艺人 MBID</th><th>范围</th><th>来源</th></tr></thead><tbody>${artistCredits.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${item.mbid ? `<a href="https://musicbrainz.org/artist/${escapeHtml(item.mbid)}" target="_blank" rel="noreferrer"><code>${escapeHtml(item.mbid)}</code></a>` : `<span class="empty">未确认，先在 MusicBrainz 搜同名艺人</span>`}</td><td>${item.scope === "release" ? "发行" : `曲目 ${escapeHtml(item.track || "")}`}</td><td class="muted">${escapeHtml(item.source || "")}${(item.candidates || []).length > 1 ? `（另有 ${item.candidates.length - 1} 个同名候选，打开 MBID 页核对消歧义注释）` : ""}</td></tr>`).join("")}</tbody></table></div><p class="muted">Add release 时把上面的 MBID 填进 Artist Credit，避免新建一个重名艺人；多艺人 / feat. 也要逐条确认。</p>`;
   $("#release-groups").innerHTML = rgNote + (rgCandidates.length ? `<div class="lookup-hint">MusicBrainz 里已有的相近发行组（点按钮复制 MBID，填进 Add release 的 Release group）：</div><div class="lookup-actions">${rgCandidates.map((item) => `<button class="lookup-link copy-mbid" data-mbid="${escapeHtml(item.mbid)}" data-label="${escapeHtml(item.title)}（${escapeHtml(item.primary_type || "类型未确认")}，${escapeHtml(item.artist || "")}，${escapeHtml(item.release_count)} 个发行）">${escapeHtml(item.title)} · ${escapeHtml(item.primary_type || "?")} · ${escapeHtml(item.artist || "")} · ${escapeHtml(item.release_count)} 发行</button><a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">↗</a>`).join("")}</div><p class="muted">如果其中一条就是这张专辑的发行组，复用它而不是新建；都不匹配才新建，并顺手补上类型与消歧义注释。</p>` : (rgNote ? "" : `<div class="empty">没有找到相近的已有发行组，这一张大概率需要新建 Release group（注意类型选对，合辑勾 Compilation）。</div>`));
 
@@ -236,6 +236,13 @@ function renderReport(report) {
 
   $("#checklist").innerHTML = report.manual_review.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}" /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("");
   $("#edit-notes").innerHTML = Object.entries(report.edit_notes).map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
+  const workRels = report.work_relations || { status: "skipped", notice: "", items: [], work_count: 0, relation_count: 0 };
+  const wrCount = $("#work-relations-count");
+  if (wrCount) {
+    const creditsN = (workRels.apple_credits || []).length;
+    wrCount.textContent = creditsN ? `Apple Credits ${creditsN} 曲` : (workRels.status === "skipped" ? "未查询" : `${workRels.work_count || 0} work / ${workRels.relation_count || 0} 关系`);
+  }
+  $("#work-relations").innerHTML = renderWorkRelations(workRels);
   $("#diagnostics").innerHTML = [...report.confidence.notes.map((note) => `<div class="diagnostic">${escapeHtml(note)}</div>`), ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`), ...report.source_errors.map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`), ...report.api_notes.map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`)].join("");
   const reviewCount = $("#review-count");
   if (reviewCount) reviewCount.textContent = report.manual_review.length ? `${report.manual_review.length} 项待勾` : "已核对完";
@@ -245,6 +252,63 @@ function renderReport(report) {
   // 工具栏高度会随标题换行 / 按钮换行变化，左导航与锚点的让位量要跟着实测值走
   syncBarOffset();
   window.scrollTo({ top: $("#results").offsetTop - 20, behavior: "smooth" });
+}
+
+function renderWorkRelations(wr) {
+  const creditsHtml = ((wr && wr.apple_credits) || []).map((credit) => {
+    const groupsHtml = (credit.groups || []).map((g) => {
+      const itemsHtml = (g.items || []).map((it) => {
+        const roles = (it.roles || []).length ? `（${escapeHtml(it.roles.join("、"))}）` : "";
+        return `<div class="wr-rel"><span class="wr-rel-type">${escapeHtml(g.title || g.id || "Credits")}</span><span>${escapeHtml(it.name)}</span>${roles ? `<span class="muted">${roles}</span>` : ""}</div>`;
+      }).join("");
+      return `<div class="wr-credit-group"><div class="wr-credit-head">${escapeHtml(g.title || g.id)}</div><div class="wr-rels">${itemsHtml}</div></div>`;
+    }).join("");
+    return `<div class="wr-track">
+      <div class="wr-track-head">
+        <strong>${escapeHtml(credit.track || "歌曲")}</strong>
+        <a href="${safeHref(credit.source_url || "")}" target="_blank" rel="noreferrer"><code>Apple Music Credits</code></a>
+      </div>
+      <div class="wr-credit-groups">${groupsHtml}</div>
+    </div>`;
+  }).join("");
+
+  if (!wr || (wr.status === "skipped" && !creditsHtml)) {
+    return `<div class="diagnostic">${escapeHtml((wr && wr.notice) || "没有可查询的 work 关系。")}</div>`;
+  }
+  const relLine = (rel, extra = "") => {
+    const attr = (rel.attributes || []).length ? ` <span class="muted">（${escapeHtml(rel.attributes.join(", "))}）</span>` : "";
+    const mbid = rel.artist_mbid ? ` <a href="https://musicbrainz.org/artist/${escapeHtml(rel.artist_mbid)}" target="_blank" rel="noreferrer"><code>${escapeHtml(rel.artist_mbid.slice(0, 8))}…</code></a>` : "";
+    return `<div class="wr-rel"><span class="wr-rel-type">${escapeHtml(rel.type || "?")}</span><span>${escapeHtml(rel.artist || "")}</span>${mbid}${attr}${extra}</div>`;
+  };
+  const itemsHtml = wr.items.map((item) => {
+    const worksHtml = (item.works || []).length ? `<div class="wr-works">${(item.works || []).map((w) => {
+      const relsHtml = (w.relations || []).map((rel) => relLine(rel)).join("");
+      return `<div class="wr-work">
+        <div class="wr-work-head">
+          <a href="${safeHref(w.url || "")}" target="_blank" rel="noreferrer"><strong>${escapeHtml(w.title || "(无标题 work)")}</strong></a>
+          <span class="pill">${escapeHtml(w.type || "Work")}</span>
+          <span class="wr-iswc">${w.iswc ? `<code>${escapeHtml(w.iswc)}</code>` : `<span class="empty">无 ISWC</span>`}</span>
+        </div>
+        ${relsHtml ? `<div class="wr-rels">${relsHtml}</div>` : `<div class="empty">work 上没有查到 artist 关系</div>`}
+      </div>`;
+    }).join("")}</div>` : `<div class="empty">没有关联 work（新建 Recording 时可顺便建 Work，注意别与已有同名词条重复）</div>`;
+    const recHtml = (item.recording_relations || []).map((rel) => relLine(rel, `<span class="muted">（recording 直接关系）</span>`)).join("");
+    const errorHtml = item.error ? `<div class="diagnostic error">查询失败：${escapeHtml(item.error)}</div>` : "";
+    return `<div class="wr-track">
+      <div class="wr-track-head">
+        <strong>${escapeHtml(item.track || "(无标题)")}</strong>
+        <a href="${safeHref(item.recording_url || "")}" target="_blank" rel="noreferrer"><code>${escapeHtml(item.recording_mbid || "")}</code></a>
+        ${errorHtml}
+      </div>
+      ${recHtml ? `<div class="wr-rels">${recHtml}</div>` : ""}
+      ${worksHtml}
+    </div>`;
+  }).join("");
+  const copyHtml = wr.markdown ? `<div class="lookup-actions"><button class="copy-note" data-note="${escapeHtml(wr.markdown)}">复制 Work 关系 Markdown</button></div>` : "";
+  const noticeHtml = wr.notice ? `<div class="diagnostic ok">${escapeHtml(wr.notice)}</div>` : "";
+  const creditsSection = creditsHtml ? `<div class="wr-credits"><div class="wr-credits-title">Apple Music Credits（版权方侧数据，MB 有没有都不影响）</div>${creditsHtml}</div>` : "";
+  const mbSection = itemsHtml ? `<div class="wr-mb">${itemsHtml}</div>` : "";
+  return `${noticeHtml}${creditsSection}${mbSection}${copyHtml}<p class="muted">只查询不建库：MusicBrainz 的编辑需要登录账号；Apple Credits 是版权方页面数据，请在 Add work / 编辑页人工核对后挂载。</p>`;
 }
 
 // 左导航：完成度与待确认项汇总

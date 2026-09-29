@@ -633,3 +633,260 @@ def test_apple_no_matching_full_storefront_borrows_tracks_only(monkeypatch):
     assert [t["title"] for t in picked["data"]["tracks"]] == ["T1-US"]  # 只借曲目表
     assert "曲目表借用" in picked["note"]
     assert "US 区" in picked["note"]
+
+
+# ------------------------------------------------------------------ Work relationships（只查询，建库人工完成）
+
+def _mb_recording_response(works=(), artist_rels=()):
+    """构造 recording 查询响应：work 关系 + recording 直接 artist 关系。"""
+    relations = []
+    for work in works:
+        relations.append({
+            "direction": "forward", "type": "performance", "target-type": "work",
+            "work": work,
+        })
+    for rel in artist_rels:
+        relations.append({"direction": "forward", "type": rel[0], "target-type": "artist", "artist": {"name": rel[1], "id": rel[2]}})
+    return {"relations": relations}
+
+
+def test_mb_work_relation_artist_flattens_attributes():
+    rel = {
+        "type": "composer",
+        "target-type": "artist",
+        "artist": {"name": "Taylor Swift", "id": "mbid-1"},
+        "attributes": [{"name": "partial"}, {"name": "additional"}],
+    }
+    flat = app.mb_work_relation_artist(rel)
+    assert flat["type"] == "composer"
+    assert flat["artist"] == "Taylor Swift"
+    assert flat["artist_mbid"] == "mbid-1"
+    assert flat["attributes"] == ["partial", "additional"]
+
+
+def test_mb_work_rels_for_recording_parses_work_and_artist_rels(monkeypatch):
+    def fake_mb(path, params):
+        if path.startswith("recording/"):
+            return _mb_recording_response(
+                works=[{"id": "w-1", "title": "The Fate of Ophelia", "type": "Song", "iswc": "T-000.000.000-0"}],
+                artist_rels=[("conductor", "Some Conductor", "a-2")],
+            )
+        if path.startswith("work/w-1"):
+            return {"relations": [
+                {"direction": "forward", "type": "composer", "target-type": "artist",
+                 "artist": {"name": "Taylor Swift", "id": "a-1"}, "attributes": [{"name": "partial"}]},
+                {"direction": "backward", "type": "writer", "target-type": "work", "work": {"id": "w-x"}},
+            ]}
+        raise AssertionError(f"unexpected path {path}")
+    monkeypatch.setattr(app, "mb_request", fake_mb)
+
+    result = app.mb_work_rels_for_recording("r-1")
+    assert len(result["works"]) == 1
+    work = result["works"][0]
+    assert work["title"] == "The Fate of Ophelia"
+    assert work["type"] == "Song"
+    assert work["iswc"] == "T-000.000.000-0"
+    assert work["url"].endswith("/work/w-1")
+    # work 上只保留 forward artist 关系（backward work 自引用被过滤）
+    assert work["relations"] == [{
+        "type": "composer", "artist": "Taylor Swift", "artist_mbid": "a-1", "attributes": ["partial"],
+    }]
+    assert result["recording_relations"] == [{
+        "type": "conductor", "artist": "Some Conductor", "artist_mbid": "a-2", "attributes": [],
+    }]
+
+
+def test_mb_work_rels_for_recording_dedupes_work(monkeypatch):
+    def fake_mb(path, params):
+        if path.startswith("recording/"):
+            return _mb_recording_response(works=[
+                {"id": "w-1", "title": "Same"},
+                {"id": "w-1", "title": "Same"},
+            ])
+        return {"relations": []}
+    monkeypatch.setattr(app, "mb_request", fake_mb)
+
+    result = app.mb_work_rels_for_recording("r-1")
+    assert len(result["works"]) == 1
+
+
+def test_mb_work_rels_for_recording_skips_work_fetch_on_error(monkeypatch):
+    calls = []
+
+    def fake_mb(path, params):
+        if path.startswith("recording/"):
+            calls.append(path)
+            return _mb_recording_response(works=[{"id": "w-1", "title": "Broken work"}])
+        raise app.FetchError("work fetch failed")
+    monkeypatch.setattr(app, "mb_request", fake_mb)
+
+    result = app.mb_work_rels_for_recording("r-1")
+    assert result["works"][0]["relations"] == []  # work 查询失败不阻塞，关系留空
+
+
+def test_build_work_relations_skips_when_no_recording_mbid():
+    tracks = [{"title": "A", "recording_mbid": ""}, {"title": "B", "recording_mbid": None}]
+    result = app.build_work_relations(tracks)
+    assert result["status"] == "skipped"
+    assert result["query_count"] == 0
+    assert result["markdown"] == ""
+
+
+def test_build_work_relations_queries_with_budget_limit(monkeypatch):
+    tracks = [{"title": f"T{i}", "recording_mbid": f"r-{i}"} for i in range(5)]
+
+    def fake_recording(mbid):
+        return {"works": [{"title": f"W-{mbid}", "mbid": f"w-{mbid}", "type": "Song",
+                           "iswc": "", "url": f"https://musicbrainz.org/work/w-{mbid}",
+                           "relations": [{"type": "composer", "artist": "A", "artist_mbid": "a-1", "attributes": []}]}],
+                "recording_relations": []}
+    monkeypatch.setattr(app, "mb_work_rels_for_recording", fake_recording)
+    monkeypatch.setattr(app, "MAX_WORK_RELS_TRACKS", 2)
+
+    result = app.build_work_relations(tracks)
+    assert result["status"] == "partial"
+    assert result["query_count"] == 2
+    assert result["limited"] == 3
+    assert len(result["items"]) == 2
+    assert result["work_count"] == 2
+    assert result["relation_count"] == 2
+    assert "超出查询预算" in result["notice"]
+
+
+def test_build_work_relations_records_failures(monkeypatch):
+    tracks = [{"title": "T1", "recording_mbid": "r-1"}, {"title": "T2", "recording_mbid": "r-2"}]
+
+    def fake_recording(mbid):
+        if mbid == "r-1":
+            raise app.FetchError("rate limited 503")
+        return {"works": [], "recording_relations": []}
+    monkeypatch.setattr(app, "mb_work_rels_for_recording", fake_recording)
+
+    result = app.build_work_relations(tracks)
+    assert result["status"] == "partial"
+    assert result["failed"] == 1
+    assert result["items"][0]["error"] == "rate limited 503"
+    assert result["items"][1]["error"] == ""
+
+
+def test_work_relations_markdown_shape():
+    items = [{
+        "track": "The Fate of Ophelia", "recording_mbid": "r-1", "recording_url": "https://musicbrainz.org/recording/r-1",
+        "works": [{
+            "title": "The Fate of Ophelia", "mbid": "w-1", "type": "Song", "iswc": "T-123",
+            "url": "https://musicbrainz.org/work/w-1",
+            "relations": [{"type": "composer", "artist": "Taylor Swift", "artist_mbid": "a-1", "attributes": []}],
+        }],
+        "recording_relations": [{"type": "producer", "artist": "Jack Antonoff", "artist_mbid": "a-2", "attributes": ["additional"]}],
+        "error": "",
+    }]
+    md = app.work_relations_markdown(items)
+    assert "### The Fate of Ophelia" in md
+    assert "recording `r-1`" in md
+    assert "- (recording) producer: Jack Antonoff (a-2)" in md
+    assert "- Work: The Fate of Ophelia (Song) [T-123] `w-1`" in md
+    assert "  - composer: Taylor Swift (a-1)" in md
+    assert "人工核对" in md
+
+
+# ------------------------------------------------------------------ 单曲链接 → 所属专辑（歌曲建库入口）
+
+def test_extract_apple_song_id_variants():
+    assert app.extract_apple_song_id("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402") == "6814997402"
+    assert app.extract_apple_song_id("https://music.apple.com/us/song/x/111") == "111"
+    assert app.extract_apple_song_id("https://music.apple.com/cn/album/the-life/6814997249") == ""      # 专辑链接不是 song
+    assert app.extract_apple_song_id("https://open.spotify.com/album/abc") == ""                        # 非 apple 域名
+    assert app.extract_apple_song_id("") == ""
+
+
+def test_itunes_album_from_song_returns_collection(monkeypatch):
+    fake = {
+        "results": [{
+            "wrapperType": "track", "trackId": 6814997402, "trackName": "The Fate of Ophelia",
+            "artistName": "Taylor Swift", "collectionId": 6814997249,
+            "collectionName": "The Life of a Showgirl: The Encore",
+            "collectionViewUrl": "https://music.apple.com/us/album/the-life/6814997249",
+        }],
+    }
+    monkeypatch.setattr(app, "fetch_json", lambda url: fake)
+    result = app.itunes_album_from_song("6814997402")
+    assert result["collection_id"] == "6814997249"
+    assert result["collection_name"] == "The Life of a Showgirl: The Encore"
+    assert result["artist"] == "Taylor Swift"
+    assert result["url"].startswith("https://music.apple.com")
+
+
+def test_itunes_album_from_song_empty_when_missing_collection(monkeypatch):
+    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": [{"wrapperType": "track", "collectionId": ""}]})
+    assert app.itunes_album_from_song("999") == {}
+    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    assert app.itunes_album_from_song("999") == {}
+
+
+# ------------------------------------------------------------------ Apple Credits（版权方侧，建 work 用资料）
+
+APPLE_CREDITS_HTML = '''<html><body><script>
+window.__INITIAL_DATA__ = {"data":{"sections":[
+  {"id":"performer","title":"\\u51fa\\u6f14\\u827a\\u4eba","items":[{"name":"Taylor Swift","roleNames":["\\u58f0\\u4e50"]},{"name":"Shellback","roleNames":["\\u7f16\\u7a0b","\\u94a2\\u7434"]}]},
+  {"id":"composer-and-lyrics","title":"\\u4f5c\\u66f2\\u548c\\u4f5c\\u8bcd","items":[{"name":"Taylor Swift","roleNames":["\\u8bcd\\u66f2\\u4f5c\\u8005"]},{"name":"Max Martin","roleNames":["\\u8bcd\\u66f2\\u4f5c\\u8005"]}]},
+  {"id":"production-and-engineering","title":"\\u5236\\u4f5c\\u548c\\u5de5\\u7a0b","items":[{"name":"Serban Ghenea","roleNames":["\\u6df7\\u97f3\\u5de5\\u7a0b\\u5e08"]}]},
+  {"id":"lyric-details","title":"\\u6b4c\\u8bcd","items":[]}
+]}}</script></body></html>'''
+
+
+def test_parse_apple_credits_extracts_groups():
+    groups = app.parse_apple_credits(APPLE_CREDITS_HTML)
+    by_id = {g["id"]: g for g in groups}
+    assert set(by_id) == {"performer", "composer-and-lyrics", "production-and-engineering"}
+    assert by_id["performer"]["title"] == "出演艺人"
+    assert by_id["performer"]["items"][0] == {"name": "Taylor Swift", "roles": ["声乐"]}
+    assert by_id["composer-and-lyrics"]["items"][1] == {"name": "Max Martin", "roles": ["词曲作者"]}
+    assert by_id["production-and-engineering"]["items"][0]["roles"] == ["混音工程师"]
+
+
+def test_parse_apple_credits_empty_on_no_sections():
+    assert app.parse_apple_credits("<html></html>") == []
+    assert app.parse_apple_credits("") == []
+
+
+def test_collect_apple_credits_only_for_song_pages(monkeypatch):
+    monkeypatch.setattr(app, "fetch_text", lambda url: APPLE_CREDITS_HTML)
+    result = app.collect_apple_credits("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402", "The Fate of Ophelia")
+    assert result["track"] == "The Fate of Ophelia"
+    assert len(result["groups"]) == 3
+    # 非歌曲页 / 非 apple 域名 / 页面抓不到都返回空
+    monkeypatch.setattr(app, "fetch_text", lambda url: (_ for _ in ()).throw(app.FetchError("boom")))
+    assert app.collect_apple_credits("https://music.apple.com/cn/song/x/1") == {}
+    assert app.collect_apple_credits("https://music.apple.com/cn/album/x/1") == {}   # 专辑页无 ?i=
+    assert app.collect_apple_credits("https://example.com/song/1") == {}
+
+
+def test_build_work_relations_credits_only_when_no_mb():
+    tracks = [{"title": "A", "recording_mbid": ""}]
+    credits = [{"track": "A", "source_url": "https://music.apple.com/cn/song/a/1", "groups": [{"id": "composer-and-lyrics", "title": "作曲和作词", "items": [{"name": "Taylor Swift", "roles": ["词曲作者"]}]}]}]
+    result = app.build_work_relations(tracks, credits)
+    assert result["status"] == "credits_only"
+    assert result["query_count"] == 0
+    assert result["apple_credits"] == credits
+    assert "可直接作为新建 Work" in result["notice"]
+    md = result["markdown"]
+    assert "Apple Music Credits" in md
+    assert "词曲作者" in md
+    assert "泰勒" not in md
+
+
+def test_build_work_relations_skipped_without_any_source():
+    result = app.build_work_relations([{"title": "A", "recording_mbid": ""}], [])
+    assert result["status"] == "skipped"
+    assert result["markdown"] == ""
+
+
+def test_work_relations_markdown_includes_apple_credits():
+    md = app.work_relations_markdown([], [{
+        "track": "The Fate of Ophelia",
+        "source_url": "https://music.apple.com/cn/song/x/1",
+        "groups": [{"id": "composer-and-lyrics", "title": "作曲和作词", "items": [{"name": "Max Martin", "roles": ["词曲作者"]}]}],
+    }])
+    assert "### The Fate of Ophelia — Apple Music Credits" in md
+    assert "- **作曲和作词**" in md
+    assert "  - Max Martin（词曲作者）" in md
