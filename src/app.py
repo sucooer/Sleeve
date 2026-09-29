@@ -713,6 +713,55 @@ def extract_spotify_track_id(url: str) -> str:
     return match.group(1) if match else ""
 
 
+def extract_deezer_track_id(url: str) -> str:
+    match = re.search(r"deezer\.com/(?:[a-z-]{2,5}/)?track/(\d+)", url or "", re.I)
+    return match.group(1) if match else ""
+
+
+def detect_song_url(url: str) -> dict[str, str]:
+    """识别「单曲链接」并给出平台标识；专辑 / 播放列表 / 其他页面返回 {}。
+
+    单曲报告（build_song_report）与专辑报告的信息几乎不重叠，各平台 track
+    链接都应路由到单曲报告。平台返回值：apple / spotify / deezer。
+    """
+    if "apple.com" in urlparse(url or "").netloc.lower():
+        apple_song = extract_apple_song_id(url)
+        if apple_song and not extract_apple_id(url):
+            return {"source": "apple", "track_id": apple_song}
+        return {}
+    spotify_id = extract_spotify_track_id(url)
+    if spotify_id:
+        return {"source": "spotify", "track_id": spotify_id}
+    deezer_id = extract_deezer_track_id(url)
+    if deezer_id:
+        return {"source": "deezer", "track_id": deezer_id}
+    return {}
+
+
+def deezer_track(track_id: str) -> dict[str, Any]:
+    """Deezer 公开 API 的 /track/<id>：单曲的 isrc / 所属专辑 / 时长 / 发行日期一次拿齐。"""
+    data = fetch_json(f"{DEEZER_BASE}/track/{quote(track_id)}")
+    if not isinstance(data, dict) or deezer_error(data) or not data.get("id"):
+        return {}
+    album = data.get("album") if isinstance(data.get("album"), dict) else {}
+    artist = data.get("artist") if isinstance(data.get("artist"), dict) else {}
+    duration = data.get("duration")
+    return {
+        "id": str(data.get("id") or ""),
+        "title": first(data.get("title")) or first(data.get("title_short")),
+        "artist": first(artist.get("name")),
+        "album": first(album.get("title")),
+        "album_id": str(album.get("id") or ""),
+        "album_url": f"https://www.deezer.com/album/{album.get('id')}" if album.get("id") else "",
+        "isrc": clean_value(data.get("isrc")),
+        "date": iso_date(data.get("release_date")),
+        "length": format_duration(int(duration) * 1000) if isinstance(duration, (int, float)) else "",
+        "url": first(data.get("link")) or f"https://www.deezer.com/track/{quote(track_id)}",
+        "image": deezer_cover_large(first(data.get("cover_xl")) or first(data.get("cover_big"))),
+        "source": "Deezer 曲目",
+    }
+
+
 def extract_mbids(url: str) -> tuple[str, str]:
     release_id = ""
     release_group_id = ""
@@ -891,11 +940,16 @@ def spotify_track(track_id: str) -> dict[str, Any]:
     data = post_json(f"{SPOTIFY_PROXY_BASE}/distantapi/spotify/getdata/", {"url": f"https://open.spotify.com/track/{track_id}"}, headers=SPOTIFY_PROXY_HEADERS)
     if not isinstance(data, dict) or not data.get("id"):
         return {}
+    # 注意：proxy 对 track 返回的是简化结构（album_name / thumbnail），
+    # 不含 album id / album url / isrc —— 专辑跳转交给用户用专辑链接再查
     return {
         "id": first(data.get("id")),
         "title": first(data.get("name")),
         "artist": first(data.get("artist_name")),
         "album": first(data.get("album_name")),
+        "album_id": "",
+        "album_url": "",
+        "isrc": "",
         "date": iso_date(data.get("release_date")),
         "length": format_duration(data.get("duration_ms")),
         "url": first(data.get("external_url")) or f"https://open.spotify.com/track/{track_id}",
@@ -1980,6 +2034,97 @@ def work_relations_markdown(items: list[dict[str, Any]], apple_credits: list[dic
         return ""
     return "\n".join(lines).rstrip() + "\n\n以上为自动查询/抓取结果，必须逐条人工核对后再挂载；ISWC 查不到就留空。"
 
+# ---------------------------------------------------------------------------
+# Lyrics URL relationship 候选：MB 的 lyrics relationship 只允许白名单站点
+# ---------------------------------------------------------------------------
+
+LYRIC_SITE_INTERNATIONAL = (
+    {"name": "Genius", "url": "https://genius.com/search?q={q}"},
+    {"name": "Musixmatch", "url": "https://www.musixmatch.com/search/{q}"},
+    {"name": "LyricsTranslate", "url": "https://lyricstranslate.com/en/search?q={q}"},
+)
+LYRIC_SITE_JAPANESE = (
+    {"name": "J-Lyric.net", "url": "https://search.j-lyric.net/index.php?kt={q}&ct=2"},
+    {"name": "Uta-Net", "url": "https://www.uta-net.com/search/?Keyword={q}"},
+    {"name": "UtaMap", "url": "https://www.utamap.com/searchkasi.php?searchname={q}&act=search"},
+    {"name": "UtaTen", "url": "https://utaten.com/search?keyword={q}"},
+)
+JAPANESE_TEXT_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf]")
+MAX_LYRICS_CANDIDATE_TRACKS = 12
+
+
+def looks_japanese(text: str) -> bool:
+    """标题/艺人含日文假名或 CJK 扩展区时，追加日文歌词站候选。"""
+    return bool(JAPANESE_TEXT_RE.search(text or ""))
+
+
+def lyrics_search_candidates(track_title: str, artist: str) -> list[dict[str, str]]:
+    """为单曲构造 MB lyrics relationship 白名单站点的歌词搜索链接。
+
+    输出的是各站「搜索页」直达链接——用户进站确认最终歌词页后，把那条 URL
+    挂到 Work / Recording 的 lyrics relationship 上即可（白名单外站点会被 MB 拒绝）。
+    纯离线构造，不触发任何网络请求。
+    """
+    query = quote(f"{track_title} {artist}".strip())
+    if not track_title or not query:
+        return []
+    sites = list(LYRIC_SITE_INTERNATIONAL)
+    if looks_japanese(f"{track_title} {artist}"):
+        sites += LYRIC_SITE_JAPANESE
+    return [{"site": site["name"], "url": site["url"].format(q=query), "whitelisted": True} for site in sites]
+
+
+def lyrics_candidates_for_tracks(tracks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """逐曲生成 lyrics 候选；超过预算的曲目跳过（提示人工）。
+
+    只生成不抓取：白名单站点普遍有 WAF，自动解析留给部署环境验证后可做增强。
+    """
+    items: list[dict[str, Any]] = []
+    for track in tracks[:MAX_LYRICS_CANDIDATE_TRACKS]:
+        title = first(track.get("title")) or ""
+        artist = first(track.get("artist")) or ""
+        if not title:
+            continue
+        links = lyrics_search_candidates(title, artist)
+        if not links:
+            continue
+        items.append({"track": title, "artist": artist, "links": links})
+    return items
+
+
+def mb_search_recording(title: str, artist: str, limit: int = 5) -> list[dict[str, Any]]:
+    """MusicBrainz 按「歌名 + 艺人」搜录音，拿 recording 的 MBID / ISRC / 所在发行。
+
+    给单曲查询用：专辑模式下 recording 从匹配上的 release 曲目表里取，不用搜。
+    返回按 score 排序的候选列表；评分仅供参考，命中与否最终看标题/艺人/时长人工核对。
+    """
+    query_parts: list[str] = []
+    if title:
+        query_parts.append(f'recording:"{mb_query_escape(title)}"')
+    if artist:
+        query_parts.append(f'artist:"{mb_query_escape(artist)}"')
+    if not query_parts:
+        return []
+    found = mb_request("recording", {"query": " AND ".join(query_parts), "limit": str(limit), "fmt": "json"})
+    rows: list[dict[str, Any]] = []
+    for item in found.get("recordings") or []:
+        mbid = first(item.get("id"))
+        if not mbid:
+            continue
+        rows.append({
+            "mbid": mbid,
+            "title": clean_value(item.get("title")),
+            "artist": mb_artist_credit(item.get("artist-credit")),
+            "isrc": next(iter(item.get("isrcs") or []), ""),
+            "length_ms": item.get("length") or "",
+            "length": format_duration(item.get("length")),
+            "score": item.get("score") or 0,
+            "releases": [clean_value(rel.get("title")) for rel in (item.get("releases") or []) if clean_value(rel.get("title"))][:4],
+            "url": f"https://musicbrainz.org/recording/{mbid}",
+        })
+    return rows
+
+
 def mb_release_sites(release_id: str) -> list[str]:
     """这条发行已经挂了哪些平台的链接（只看站点名，用来算「还缺什么」）。"""
     try:
@@ -2574,6 +2719,295 @@ def search_candidates(album_name: str, artist_name: str = "") -> dict[str, Any]:
     }
 
 
+def build_song_report(primary_url: str, source_urls: list[str], song_source: str = "apple", song_id: str = "", album_name: str = "", artist_name: str = "") -> dict[str, Any]:
+    """单曲链接的独立报告：聚焦「这一首歌」的资料（recording / work / credits / 歌词候选）。
+
+    平台支持：apple（music.apple.com/…/song/…）、spotify（open.spotify.com/track/…）、
+    deezer（deezer.com/track/…）。三种来源都归一化成同样的 song 字段，MB 检索与
+    歌词候选等下游逻辑与平台无关。
+
+    与专辑报告（build_report）并列：单曲查询里有用的是 recording、ISRC、词曲作者、
+    Apple Credits、歌词页候选这些「歌曲级」信息；专辑的条码、品番、发行地区、整张
+    tracklist 与它无关，所以不复用专辑模板。所属专辑只作为一条「线索」给出，并带
+    一键切到专辑资料查询的链接，需要建专辑时再走专辑报告。
+    """
+    CACHE_STATS.hit = 0
+    CACHE_STATS.miss = 0
+    source_errors: list[dict[str, str]] = []
+    source_warnings: list[dict[str, str]] = []
+    api_notes: list[str] = []
+    sources: list[dict[str, Any]] = []
+
+    # ---- 1. 平台数据源：单曲的权威基础字段（时长 / ISRC / 所属专辑）----
+    song: dict[str, Any] = {}
+    platform_label = {"apple": "Apple Music", "spotify": "Spotify", "deezer": "Deezer"}.get(song_source, song_source)
+    if song_source == "apple":
+        try:
+            data = fetch_json(f"https://itunes.apple.com/lookup?id={quote(song_id)}")
+            track = next((item for item in data.get("results") or [] if item.get("wrapperType") == "track"), {})
+            if track:
+                artwork = first(track.get("artworkUrl100"))
+                if artwork:
+                    artwork = artwork.replace("100x100bb", "1000x1000-999")
+                song = {
+                    "title": first(track.get("trackName")),
+                    "artist": first(track.get("artistName")),
+                    "album": first(track.get("collectionName")),
+                    "album_platform_id": str(track.get("collectionId") or ""),
+                    "album_source": platform_label,
+                    "album_url": normalize_mb_url(first(track.get("collectionViewUrl"))),
+                    "track_url": first(track.get("trackViewUrl")).split("&uo=")[0],
+                    "length": format_duration(track.get("trackTimeMillis")),
+                    "isrc": clean_value(track.get("isrc")),
+                    "release_date": iso_date(track.get("releaseDate")),
+                    "genre": first(track.get("primaryGenreName")),
+                    "copyright": clean_value(track.get("copyright")),
+                    "artwork_url": artwork,
+                }
+                sources.append({"name": platform_label, "status": "ok", "url": song.get("track_url") or primary_url, "summary": song})
+        except FetchError as exc:
+            source_errors.append({"source": "Apple/iTunes", "error": f"单曲查询失败：{exc}"})
+    elif song_source == "spotify":
+        try:
+            data = spotify_track(song_id)
+            if data.get("id"):
+                song = {
+                    "title": data["title"],
+                    "artist": data["artist"],
+                    "album": data["album"],
+                    "album_platform_id": data["album_id"],
+                    "album_source": platform_label,
+                    "album_url": data["album_url"],
+                    "track_url": data["url"],
+                    "length": data["length"],
+                    "isrc": clean_value(data["isrc"]),
+                    "release_date": data["date"],
+                    "genre": "",
+                    "artwork_url": data["image"],
+                }
+                sources.append({"name": "Spotify", "status": "ok", "url": data["url"], "summary": song})
+        except FetchError as exc:
+            source_errors.append({"source": "Spotify", "error": f"单曲查询失败：{exc}"})
+    elif song_source == "deezer":
+        try:
+            data = deezer_track(song_id)
+            if data.get("id"):
+                song = {
+                    "title": data["title"],
+                    "artist": data["artist"],
+                    "album": data["album"],
+                    "album_platform_id": data["album_id"],
+                    "album_source": platform_label,
+                    "album_url": data["album_url"],
+                    "track_url": data["url"],
+                    "length": data["length"],
+                    "isrc": clean_value(data["isrc"]),
+                    "release_date": data["date"],
+                    "genre": "",
+                    "artwork_url": data["image"],
+                }
+                sources.append({"name": "Deezer", "status": "ok", "url": data["url"], "summary": song})
+        except FetchError as exc:
+            source_errors.append({"source": "Deezer", "error": f"单曲查询失败：{exc}"})
+    sources_ok = any(item.get("status") == "ok" for item in sources)
+    if not first(song.get("title")) or not sources_ok:
+        return {
+            "needs_selection": True,
+            "reason": f"无法解析该单曲链接（{platform_label} 查不到这首歌）。请确认链接有效，或改用专辑 / 播放列表链接。",
+            "query": {"album_name": album_name, "artist_name": artist_name},
+        }
+
+    # ---- 2. MusicBrainz recording 搜索（歌名 + 艺人）----
+    recording: dict[str, Any] = {}
+    mb_reachable = False
+    try:
+        rows = mb_search_recording(song["title"], song["artist"])
+        mb_reachable = True
+        if rows:
+            best = rows[0]
+            recording = {
+                "mbid": best["mbid"],
+                "url": best["url"],
+                "title": best["title"],
+                "artist": best["artist"],
+                "isrc": best["isrc"],
+                "length": best["length"],
+                "score": best["score"],
+                "releases": best["releases"],
+                "suggested": len(rows) > 1,
+            }
+    except FetchError as exc:
+        source_errors.append({"source": "MusicBrainz", "error": f"recording 搜索失败：{exc}"})
+    if mb_reachable:
+        api_notes.append("MusicBrainz recording 搜索正常（MB 限速 1 req/s，慢属正常）" if not source_errors else "MusicBrainz 查询在本次环境中不可用")
+
+    # ---- 3. Work 关系：recording → work / composer / lyricist ----
+    work_relations: dict[str, Any] = {
+        "status": "skipped",
+        "notice": "没有可查询的 recording：MusicBrainz 里没找到这首歌的录音。先在 MB 建好 recording（或先从专辑发行建库），再来查询它已挂的 work 关系。",
+        "items": [], "query_count": 0, "failed": 0, "limited": 0,
+        "work_count": 0, "relation_count": 0, "apple_credits": [],
+        "markdown": "",
+    }
+    if recording.get("mbid"):
+        try:
+            result = mb_work_rels_for_recording(recording["mbid"])
+            works = result["works"]
+            rec_rels = result["recording_relations"]
+            work_count = len(works)
+            relation_count = len(works) + len(rec_rels)
+            work_relations = {
+                "status": "ok" if work_count or relation_count else "empty",
+                "notice": (f"已查到 MusicBrainz 上这首歌的 recording（{recording['mbid']}）下的 {relation_count} 条关系" if work_count or relation_count
+                           else "recording 已存在，但它还没挂任何 work / artist 关系——可在 MB 页面上直接新建 Work 并挂 composer / lyricist / producer。"),
+                "items": [{
+                    "track": song["title"],
+                    "recording_mbid": recording["mbid"],
+                    "recording_url": recording["url"],
+                    "works": works,
+                    "recording_relations": rec_rels,
+                    "error": "",
+                }],
+                "query_count": 1, "failed": 0, "limited": 0,
+                "work_count": work_count, "relation_count": relation_count,
+                "apple_credits": [],
+                "markdown": "",
+            }
+        except FetchError as exc:
+            work_relations["status"] = "failed"
+            work_relations["failed"] = 1
+            work_relations["notice"] = f"查询 recording 的 work 关系失败：{exc}"
+
+    # ---- 4. Apple 歌曲页 Credits（版权方侧，不依赖 MB）----
+    #    apple 来源直接用输入页；spotify/deezer 来源先在 iTunes 搜同名同艺人的单曲，
+    #    拿到 Apple Music 页面再抓 Credits（同一首歌，词曲/制作团队通用）。
+    apple_credits: list[dict[str, Any]] = []
+    credit_url = primary_url if song_source == "apple" else ""
+    if song_source != "apple":
+        try:
+            term = quote(f"{song['title']} {song['artist']}")
+            search = fetch_json(f"https://itunes.apple.com/search?term={term}&entity=song&limit=5")
+            for item in search.get("results") or []:
+                if item.get("wrapperType") != "track":
+                    continue
+                candidate = first(item.get("trackViewUrl"))
+                found_name = first(item.get("trackName"))
+                found_artist = first(item.get("artistName"))
+                if not candidate:
+                    continue
+                # Apple 标题可能把全角标点换成半角（"その結婚、正気ですか？" vs "?"），
+                # 用艺人完全一致 + 标题模糊匹配来判定是同一首歌
+                if (found_artist and found_artist == song["artist"]) or (found_name and title_is_related(found_name, song["title"])):
+                    credit_url = candidate.split("&uo=")[0]
+                    break
+        except FetchError:
+            pass
+    credit = collect_apple_credits(credit_url, song["title"]) if credit_url else {}
+    if credit:
+        apple_credits.append(credit)
+        work_relations["apple_credits"] = apple_credits
+        if work_relations["status"] == "skipped":
+            work_relations["status"] = "credits_only"
+            work_relations["notice"] = "MB 尚未匹配到这首歌的 recording，无法查现有关联；已从 Apple Music 页面抓到 Credits，可直接作为新建 Work / Recording 时挂 relationship 的依据。"
+        work_relations["markdown"] = work_relations_markdown(work_relations.get("items") or [], apple_credits)
+    else:
+        source_warnings.append({"source": "Apple Music Credits", "warning": "没抓到对应歌曲页的 Credits（可能是 WAF / 页面结构变化 / iTunes 搜不到同名单曲）。词曲作者/制作信息需从其他官方渠道人工补齐。"})
+
+    # ---- 5. 歌词 URL relationship 候选（白名单站点搜索页直达）----
+    lyric_links = lyrics_search_candidates(song["title"], song["artist"])
+    lyrics_candidates = [{"track": song["title"], "artist": song["artist"], "links": lyric_links}] if lyric_links else []
+
+    # ---- 6. 外部链接：当前平台单曲页 + MB recording 已挂的 URL ----
+    external_links: list[dict[str, str]] = []
+    track_rel = "purchase for download" if song_source == "apple" else "streaming"
+    if song.get("track_url"):
+        external_links.append({"site": platform_label, "relationship": track_rel, "url": song["track_url"], "source": platform_label})
+    if recording.get("mbid"):
+        try:
+            rec_urls = mb_request(f"recording/{recording['mbid']}", {"inc": "url-rels", "fmt": "json"})
+            for relation in rec_urls.get("relations") or []:
+                resource = first((relation.get("url") or {}).get("resource"))
+                site, _ = site_info(resource)
+                if site and resource and resource != song.get("track_url"):
+                    external_links.append({"site": site, "relationship": first(relation.get("type")) or "url", "url": resource, "source": "MusicBrainz"})
+        except FetchError:
+            pass
+
+    # ---- 7. 交付材料：核对清单 / Edit note 草稿 ----
+    checklist: list[dict[str, str]] = []
+    if recording.get("mbid"):
+        checklist.append({"label": "确认 recording 就是这一版", "reason": f"MB 匹配到录音 {recording['mbid']}（score {recording.get('score')}）。看艺人/时长/ISRC 与发行版本一致；同名不同版（现场、翻唱、重录）别混。"})
+        if recording.get("releases"):
+            checklist.append({"label": "确认 recording 归属的发行", "reason": f"这首歌已出现在：{'、'.join(recording['releases'])}。挂关系时 recording 选对，别在别的发行下重复建。"})
+    else:
+        checklist.append({"label": "先在 MusicBrainz 建 / 找 recording", "reason": "MB 里还没有这首歌的录音。Add recording 时用下方 Edit note 草稿的字段；或在所属专辑 Release 的曲目表里建。"})
+    checklist.append({"label": "逐条核对 Apple Credits 后再挂关系", "reason": "Apple 页面 Credits 是版权方侧数据，作曲/作词/制作/工程按页面角色挂；角色名随页面语言变化，别硬译。"})
+    if lyric_links:
+        checklist.append({"label": "歌词页候选人工确认后挂 lyrics 关系", "reason": "MB 的 lyrics relationship 只允许白名单站点。在各站搜索页确认到歌词页后，把最终 URL 挂到 Work / Recording 上，别挂搜索页。"})
+    checklist.append({"label": "ISRC / ISWC 原则", "reason": "ISRC 以发行侧数据为准；ISWC 查不到就留空，不要从别的歌曲复制。"})
+
+    edit_notes: dict[str, str] = {}
+    dl = "、".join(item for item in [song.get("length"), f"ISRC {song['isrc']}" if song.get("isrc") else "", f"发行于 {song.get('release_date')}" if song.get("release_date") else ""] if item)
+    disambig_notes = []
+    if recording.get("mbid"):
+        disambig_notes.append(f"现有 recording：{recording['url']}")
+    edit_notes["Recording / Work 提交备忘"] = "\n".join(
+        [f"歌曲：{song.get('title')} —— {song.get('artist')}", f"时长：{song.get('length') or '未确认'} · {dl or '无其他基础字段'}"] + disambig_notes
+    )
+    if work_relations.get("markdown"):
+        edit_notes["Work 关系与 Credits"] = work_relations["markdown"]
+
+    return {
+        "report_type": "song",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "input": {"url": primary_url, "urls": source_urls, "song_source": song_source, "song_id": song_id},
+        "song": song,
+        "recording": recording,
+        "apple_credits": apple_credits,
+        "work_relations": work_relations,
+        "lyrics_candidates": lyrics_candidates,
+        "external_links": external_links,
+        "manual_review": checklist,
+        "edit_notes": edit_notes,
+        "source_warnings": source_warnings,
+        "source_errors": source_errors,
+        "api_notes": api_notes,
+        "sources": sources,
+        "markdown": song_report_markdown(song, recording, work_relations, lyrics_candidates),
+    }
+
+
+def song_report_markdown(song: dict[str, Any], recording: dict[str, Any], work_relations: dict[str, Any], lyrics_candidates: list[dict[str, Any]]) -> str:
+    """单曲报告的一份紧凑 Markdown，供「复制 / 下载」用。"""
+    lines = [
+        f"# {first(song.get('title'))}",
+        "",
+        f"- Artist: {first(song.get('artist'))}",
+        f"- 时长: {first(song.get('length')) or '未确认'}",
+        f"- ISRC: {first(song.get('isrc')) or '未确认'}",
+        f"- 所属专辑: {first(song.get('album')) or '未确认'}（{first(song.get('album_url')) or '无链接'}）",
+        f"- 发行日期: {first(song.get('release_date')) or '未确认'}",
+        f"- 类型: {first(song.get('genre')) or '未确认'}",
+    ]
+    if song.get("track_url"):
+        lines.append(f"- {first(song.get('album_source')) or '平台'}: {song['track_url']}")
+    if recording.get("mbid"):
+        lines += ["", "## MusicBrainz recording", f"- MBID: {recording['mbid']}", f"- URL: {recording['url']}",
+                  f"- 匹配评分: {recording.get('score') or 0}", f"- 所在发行: {'、'.join(recording.get('releases') or []) or '未确认'}"]
+    for credit in (work_relations.get("apple_credits") or []):
+        lines += ["", f"## Apple Music Credits（{first(credit.get('source_url'))}）"]
+        for group in credit.get("groups") or []:
+            lines.append(f"- **{first(group.get('title')) or first(group.get('id'))}**")
+            for item in group.get("items") or []:
+                roles = "、".join(item.get("roles") or [])
+                lines.append(f"  - {first(item.get('name'))}" + (f"（{roles}）" if roles else ""))
+    if lyrics_candidates:
+        lines += ["", "## Lyrics 候选（MB 白名单站点）"]
+        for link in (lyrics_candidates[0].get("links") or []):
+            lines.append(f"- {link.get('site')}: {link.get('url')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def build_report(album_name: str, input_url: str = "", input_urls: Any = None, manual_catalog: str = "", artist_name: str = "") -> dict[str, Any]:
     # 清零后统计的是「这一次查询」的命中数，否则长跑的服务会把历史累计算进来，
     # 报告里那句「本次有 N 个命中缓存」就成了假数据
@@ -2594,6 +3028,10 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     primary_url = source_urls[0] if source_urls else ""
     if not source_urls and (album_name or artist_name):
         return {"needs_selection": True, "reason": "未填写链接，请先从候选结果中选择一张专辑", "query": {"album_name": album_name, "artist_name": artist_name}, "search": search_candidates(album_name, artist_name)}
+    # 单曲链接走单曲报告：需要的字段（recording / work / credits / 歌词候选）与专辑报告几乎不重叠
+    song_url_info = detect_song_url(primary_url) if source_urls else {}
+    if song_url_info:
+        return build_song_report(primary_url, source_urls, song_url_info["source"], song_url_info["track_id"], album_name, artist_name)
     page_summaries = [source_page_summary(url) for url in source_urls]
     page_summaries = [summary for summary in page_summaries if summary]
     page_hint = next((item for item in page_summaries if item.get("status") == "ok" and (item.get("title") or item.get("artist"))), {})
@@ -2834,6 +3272,8 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     # Work relationships：逐轨查询 MusicBrainz 的 work / composer / lyricist 关系。
     # 只查询展示，建库（建 Work、挂关系）由人工在 MusicBrainz 完成。
     work_relations = build_work_relations(tracks, apple_credits)
+    # Lyrics URL relationship 候选：MB 只允许白名单站点，给出各站搜索页直达链接
+    lyrics_candidates = lyrics_candidates_for_tracks(tracks)
     date = first(mb_data.get("date")) or first(page_hint.get("date")) or first(spotify_data.get("date")) or first(apple_data.get("date")) or first(deezer_data.get("date"))
     language, script = language_script(title, tracks, apple_url_country)
     is_compilation, compilation_note = likely_compilation(title, [apple_data, mb_data, deezer_data])
@@ -3109,6 +3549,7 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
         },
         "tracks": tracks,
         "work_relations": work_relations,
+        "lyrics_candidates": lyrics_candidates,
         "sources": sources,
         "missing_fields": missing_fields,
         "duplicates": duplicates,

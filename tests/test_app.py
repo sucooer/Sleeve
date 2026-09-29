@@ -890,3 +890,252 @@ def test_work_relations_markdown_includes_apple_credits():
     assert "### The Fate of Ophelia — Apple Music Credits" in md
     assert "- **作曲和作词**" in md
     assert "  - Max Martin（词曲作者）" in md
+
+
+# ------------------------------------------------------------------ Lyrics URL relationship 候选（MB 白名单站点）
+
+def test_looks_japanese():
+    assert app.looks_japanese("君の名は")
+    assert app.looks_japanese("チェリータイム")
+    assert not app.looks_japanese("The Fate of Ophelia")
+    assert not app.looks_japanese("")
+
+
+def test_lyrics_search_candidates_international():
+    links = app.lyrics_search_candidates("The Fate of Ophelia", "Taylor Swift")
+    sites = [l["site"] for l in links]
+    assert sites == ["Genius", "Musixmatch", "LyricsTranslate"]
+    assert all(l["whitelisted"] for l in links)
+    genius = links[0]["url"]
+    assert "The%20Fate%20of%20Ophelia%20Taylor%20Swift" in genius
+    assert genius.startswith("https://genius.com/search?q=")
+    assert links[1]["url"].startswith("https://www.musixmatch.com/search/")
+    assert links[2]["url"].startswith("https://lyricstranslate.com/en/search?q=")
+
+
+def test_lyrics_search_candidates_japanese_appends_jp_sites():
+    links = app.lyrics_search_candidates("夜に駆ける", "YOASOBI")
+    sites = [l["site"] for l in links]
+    assert sites[:3] == ["Genius", "Musixmatch", "LyricsTranslate"]
+    assert "J-Lyric.net" in sites and "Uta-Net" in sites and "UtaMap" in sites and "UtaTen" in sites
+    jp = next(l for l in links if l["site"] == "J-Lyric.net")["url"]
+    assert jp.startswith("https://search.j-lyric.net/index.php?kt=")
+
+
+def test_lyrics_search_candidates_empty_title():
+    assert app.lyrics_search_candidates("", "") == []
+    assert app.lyrics_search_candidates("", "Taylor") == []
+
+
+def test_lyrics_candidates_for_tracks_budget_and_skip():
+    tracks = [
+        {"title": f"Song {i}", "artist": "A", "recording_mbid": f"r{i}"} for i in range(3)
+    ] + [{"title": "", "artist": "B"}]
+    items = app.lyrics_candidates_for_tracks(tracks)
+    assert len(items) == 3
+    assert all(it["track"].startswith("Song") for it in items)
+    assert all(len(it["links"]) == 3 for it in items)  # 英文歌 3 个国际站
+
+    many = app.lyrics_candidates_for_tracks([{"title": f"T{i}", "artist": "A"} for i in range(20)])
+    assert len(many) <= app.MAX_LYRICS_CANDIDATE_TRACKS
+
+
+# ------------------------------------------------------------------ 单曲链接：独立 song 报告（recording / work / credits / 歌词候选）
+
+def test_mb_search_recording_basic(monkeypatch):
+    fake = {"recordings": [{
+        "id": "abc-123", "title": "The Fate of Ophelia", "score": 100,
+        "artist-credit": [{"name": "Taylor Swift", "joinphrase": ""}],
+        "isrcs": ["USUG12506436"], "length": 226000,
+        "releases": [{"title": "The Life of a Showgirl: The Encore"}],
+    }]}
+    monkeypatch.setattr(app, "mb_request", lambda path, params: fake if path == "recording" else {})
+    rows = app.mb_search_recording("The Fate of Ophelia", "Taylor Swift")
+    assert rows[0]["mbid"] == "abc-123"
+    assert rows[0]["isrc"] == "USUG12506436"
+    assert rows[0]["length"] == "3:46"
+    assert rows[0]["artist"] == "Taylor Swift"
+
+
+def test_mb_search_recording_no_terms():
+    assert app.mb_search_recording("", "") == []
+
+
+def _fake_itunes_track():
+    return {"results": [{
+        "wrapperType": "track", "trackId": 6814997402, "trackName": "The Fate of Ophelia",
+        "artistName": "Taylor Swift", "collectionName": "The Life of a Showgirl: The Encore",
+        "collectionId": 6814997249, "trackTimeMillis": 226000, "isrc": "USUG12506436",
+        "releaseDate": "2026-09-25T07:00:00Z", "primaryGenreName": "Pop",
+        "trackViewUrl": "https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
+        "collectionViewUrl": "https://music.apple.com/us/album/the-life-of-a-showgirl-the-encore/6814997249",
+        "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/x.jpg/100x100bb.jpg",
+    }]}
+
+
+def test_build_song_report_full(monkeypatch):
+    monkeypatch.setattr(app, "fetch_json", lambda url: _fake_itunes_track())
+    monkeypatch.setattr(app, "mb_request", lambda path, params: _mb_song_payload(path, params))
+    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
+    report = app.build_song_report("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
+                                   ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"],
+                                   "apple", "6814997402")
+    assert report["report_type"] == "song"
+    song = report["song"]
+    assert song["title"] == "The Fate of Ophelia"
+    assert song["artist"] == "Taylor Swift"
+    assert song["album"] == "The Life of a Showgirl: The Encore"
+    assert song["album_platform_id"] == "6814997249"
+    assert song["album_source"] == "Apple Music"
+    assert song["track_url"].startswith("https://music.apple.com/cn/song/")
+    assert song["length"] == "3:46"
+    assert song["isrc"] == "USUG12506436"
+    assert "1000x1000" in song["artwork_url"]
+    assert report["recording"]["mbid"] == "rec-1"
+    assert report["lyrics_candidates"][0]["track"] == "The Fate of Ophelia"
+    sites = [l["site"] for l in report["lyrics_candidates"][0]["links"]]
+    assert sites == ["Genius", "Musixmatch", "LyricsTranslate"]
+    assert any(e["site"] == "Apple Music" for e in report["external_links"])
+    assert any(e["site"] == "Deezer" for e in report["external_links"])
+    assert len(report["manual_review"]) >= 4
+    assert report["edit_notes"]["Recording / Work 提交备忘"]
+    assert "The Fate of Ophelia" in report["markdown"]
+
+
+def _mb_song_payload(path, params):
+    if path == "recording":
+        return {"recordings": [{
+            "id": "rec-1", "title": "The Fate of Ophelia", "score": 92,
+            "artist-credit": [{"name": "Taylor Swift", "joinphrase": ""}],
+            "isrcs": ["USUG12506436"], "length": 226000,
+            "releases": [{"title": "The Life of a Showgirl: The Encore"}],
+        }]}
+    if path == "recording/rec-1":
+        return {
+            "relations": [
+                {"direction": "forward", "target-type": "work", "work": {"id": "work-1", "title": "The Fate of Ophelia", "type": "Song"}},
+                {"direction": "forward", "target-type": "url", "url": {"resource": "https://www.deezer.com/track/123"}},
+            ],
+            "works": [],
+        }
+    return {}
+
+
+def _fake_apple_credit(track_title):
+    return {"track": track_title, "source_url": "https://music.apple.com/cn/song/x/1", "groups": [
+        {"id": "composer-and-lyrics", "title": "词曲作者", "items": [{"name": "Taylor Swift", "roles": ["词曲"]}]},
+    ]}
+
+
+def test_build_song_report_lookup_fails(monkeypatch):
+    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    report = app.build_song_report("https://music.apple.com/cn/song/x/999", ["https://music.apple.com/cn/song/x/999"], "apple", "999")
+    assert report.get("needs_selection") is True
+
+
+def test_build_song_report_mb_fails_but_credits_ok(monkeypatch):
+    monkeypatch.setattr(app, "fetch_json", lambda url: _fake_itunes_track())
+    def boom(path, params):
+        raise app.FetchError("MB unreachable")
+    monkeypatch.setattr(app, "mb_request", boom)
+    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
+    report = app.build_song_report("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
+                                   ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"], "apple", "6814997402")
+    assert report["recording"] == {}
+    assert report["source_errors"], "MB 失败要记进诊断"
+    assert report["work_relations"]["status"] == "credits_only"
+    assert report["work_relations"]["apple_credits"], "credits 与 work 关系合一展示"
+    assert report["lyrics_candidates"][0]["track"] == "The Fate of Ophelia"
+
+
+def test_build_song_report_japanese_lyric_sites(monkeypatch):
+    itunes = _fake_itunes_track()
+    itunes["results"][0]["trackName"] = "夜に駆ける"
+    itunes["results"][0]["artistName"] = "YOASOBI"
+    monkeypatch.setattr(app, "fetch_json", lambda url: itunes)
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": {})
+    report = app.build_song_report("https://music.apple.com/cn/song/夜に駆ける/111", ["https://music.apple.com/cn/song/夜に駆ける/111"], "apple", "111")
+    sites = [l["site"] for l in report["lyrics_candidates"][0]["links"]]
+    assert "J-Lyric.net" in sites and "UtaTen" in sites
+
+
+def test_build_report_routes_song_to_song_report(monkeypatch):
+    monkeypatch.setattr(app, "build_song_report", lambda *a, **k: {"report_type": "song", "song": {"title": "x"}})
+    report = app.build_report("", "https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402")
+    assert report["report_type"] == "song"
+
+
+# ------------------------------------------------------------------ 多平台单曲：spotify / deezer 都走单曲报告
+
+def test_detect_song_url_platforms():
+    assert app.detect_song_url("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402?x=1") == {"source": "apple", "track_id": "6814997402"}
+    assert app.detect_song_url("https://music.apple.com/cn/album/the-life/6814997249") == {}
+    assert app.detect_song_url("https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK?si=abc") == {"source": "spotify", "track_id": "5Xecnqa3ODQuCK9BCms2VK"}
+    assert app.detect_song_url("https://open.spotify.com/intl-ja/track/5Xecnqa3ODQuCK9BCms2VK") == {"source": "spotify", "track_id": "5Xecnqa3ODQuCK9BCms2VK"}
+    assert app.detect_song_url("https://open.spotify.com/album/4hF2gTGuPYlykYuphDxi8J") == {}
+    assert app.detect_song_url("https://www.deezer.com/track/123456789") == {"source": "deezer", "track_id": "123456789"}
+    assert app.detect_song_url("https://www.deezer.com/us/track/123456789") == {"source": "deezer", "track_id": "123456789"}
+    assert app.detect_song_url("https://www.deezer.com/album/123456789") == {}
+
+
+def test_build_song_report_spotify(monkeypatch):
+    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+        "id": "5Xecnqa3ODQuCK9BCms2VK", "title": "The Fate of Ophelia", "artist": "Taylor Swift",
+        "album": "The Life of a Showgirl: The Encore", "album_id": "4hF2gTGuPYlykYuphDxi8J",
+        "album_url": "https://open.spotify.com/album/4hF2gTGuPYlykYuphDxi8J", "isrc": "USUG12506436",
+        "date": "2026-09-25", "length": "3:46", "url": "https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK",
+        "image": "https://i.scdn.co/image/abc", "source": "Spotify 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})  # itunes credits 搜索找不到（降级）
+    report = app.build_song_report("https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK",
+                                   ["https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK"], "spotify", "5Xecnqa3ODQuCK9BCms2VK")
+    assert report["report_type"] == "song"
+    s = report["song"]
+    assert s["title"] == "The Fate of Ophelia"
+    assert s["album_source"] == "Spotify"
+    assert s["album_platform_id"] == "4hF2gTGuPYlykYuphDxi8J"
+    assert s["album_url"] == "https://open.spotify.com/album/4hF2gTGuPYlykYuphDxi8J"
+    assert s["isrc"] == "USUG12506436"
+    assert report["external_links"][0]["site"] == "Spotify"
+    assert report["external_links"][0]["relationship"] == "streaming"
+
+
+def test_build_song_report_deezer(monkeypatch):
+    monkeypatch.setattr(app, "deezer_track", lambda track_id: {
+        "id": "123456789", "title": "The Fate of Ophelia", "artist": "Taylor Swift",
+        "album": "The Life of a Showgirl: The Encore", "album_id": "987654321",
+        "album_url": "https://www.deezer.com/album/987654321", "isrc": "USUG12506436",
+        "date": "2026-09-25", "length": "3:46", "url": "https://www.deezer.com/track/123456789",
+        "image": "https://cdns-preview-x.dzcdn.net/x.jpg", "source": "Deezer 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    report = app.build_song_report("https://www.deezer.com/track/123456789",
+                                   ["https://www.deezer.com/track/123456789"], "deezer", "123456789")
+    s = report["song"]
+    assert s["album_source"] == "Deezer"
+    assert s["album_platform_id"] == "987654321"
+    assert report["external_links"][0]["site"] == "Deezer"
+    assert report["external_links"][0]["relationship"] == "streaming"
+
+
+def test_build_song_report_spotify_uses_apple_credits(monkeypatch):
+    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+        "id": "t1", "title": "夜に駆ける", "artist": "YOASOBI", "album": "夜に駆ける",
+        "album_id": "a1", "album_url": "https://open.spotify.com/album/a1", "isrc": "",
+        "date": "", "length": "4:21", "url": "https://open.spotify.com/track/t1", "image": "",
+        "source": "Spotify 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    # iTunes 搜到 Apple 页面 → 抓到 credits → credits_only
+    def fake_fetch(url):
+        if url.startswith("https://itunes.apple.com/search"):
+            return {"results": [{"wrapperType": "track", "trackName": "夜に駆ける", "trackViewUrl": "https://music.apple.com/jp/song/x/123?i=456&uo=4"}]}
+        return {"results": []}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title) if "apple.com" in url else {})
+    report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
+    assert report["work_relations"]["status"] == "credits_only"
+    assert report["apple_credits"][0]["track"] == "夜に駆ける"
