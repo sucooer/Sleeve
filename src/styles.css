@@ -1174,6 +1174,45 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
 }
 
 /* ============================================================
+   加载动画（splash-screen）
+   刷新 / 重新打开页面时先显示这里，替代会闪现的认证窗口；
+   app.js 完成 /api/health 检查后隐藏。z-index 低于登录层（200），
+   需要登录时登录层会盖上来（双保险）。
+   ============================================================ */
+.splash-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 190;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: var(--bg-0, #141517);
+}
+.splash-screen.hidden { display: none; }
+.splash-mark {
+  display: block;
+  filter: drop-shadow(0 8px 24px rgba(88, 101, 242, .45));
+}
+.splash-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, .12);
+  border-top-color: #5865F2;
+  animation: splash-spin .9s linear infinite;
+}
+@keyframes splash-spin {
+  to { transform: rotate(360deg); }
+}
+.splash-text {
+  font-size: 14px;
+  color: var(--ink-3, #b5bac1);
+  letter-spacing: .04em;
+}
+
+/* ============================================================
    登录层（feat/custom-login）
    自定义认证界面：替代浏览器原生 Basic 弹窗。
    全屏毛玻璃遮罩 + 居中卡片，沿用主设计系统的配色与圆角。
