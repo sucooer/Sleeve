@@ -1354,3 +1354,32 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
   transition: background .15s, border-color .15s;
 }
 .song-album .lookup-link:hover { background: rgba(87, 242, 135, .22); }
+
+/* 数据源用量徽标（右下角）：只在配了 Soundcharts 且用量可查时显示 */
+.usage-badge {
+  position: fixed;
+  right: var(--s4, 16px);
+  bottom: var(--s4, 16px);
+  z-index: 40;                     /* 在内容之上、登录遮罩之下 */
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 6px 14px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-3, #b5bac1);
+  background: var(--sunken, rgba(10, 11, 13, .55));
+  border: 1px solid var(--line, rgba(255, 255, 255, .1));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;             /* 纯信息展示，不挡交互 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.usage-badge.usage-low {
+  color: var(--amber, #f0b232);
+  border-color: rgba(240, 178, 50, .45);
+}
+@media (max-width: 560px) {
+  .usage-badge { font-size: 11px; right: var(--s3, 12px); bottom: var(--s3, 12px); }
+}

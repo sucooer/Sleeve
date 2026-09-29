@@ -468,6 +468,17 @@ def test_health_reports_injected_version(live_server):
     assert payload["version"] == "1.2.3"
 
 
+def test_api_usage_endpoint(live_server):
+    # 测试进程未配数据源凭据 → 两个源都报未配置，且不触发任何出网请求
+    with urlopen(f"http://127.0.0.1:{live_server}/api/usage", timeout=2) as response:
+        payload = json.load(response)
+    assert response.status == 200
+    assert payload["generated_at"]
+    assert "sonovault" in payload["sources"] and "soundcharts" in payload["sources"]
+    assert payload["sources"]["sonovault"]["configured"] is False
+    assert payload["sources"]["soundcharts"]["configured"] is False
+
+
 def test_index_badge_uses_injected_version(live_server):
     """index.html 徽标里的 __VERSION__ 占位符要被替换成注入的版本；
     还显示写死的 v0.4、或原样保留占位符，都算注入没生效。"""
@@ -1139,3 +1150,297 @@ def test_build_song_report_spotify_uses_apple_credits(monkeypatch):
     report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
     assert report["work_relations"]["status"] == "credits_only"
     assert report["apple_credits"][0]["track"] == "夜に駆ける"
+
+
+# ------------------------------------------------------------ Sonovault ISRC 补查
+
+def test_sonovault_track_search_parses_and_filters(monkeypatch):
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"results": [
+        {"id": 1, "title": "Around the World (loop)", "artists": [{"name": "Daft Punk"}], "isrc": None, "iswc": None},
+        {"id": 2, "title": "Around the World", "artists": [{"name": "Masters At Work"}, {"name": "Daft Punk"}], "isrc": "GBDUW0600009", "iswc": None},
+    ]})
+    got = app.sonovault_track_search("Around the World", "Daft Punk")
+    assert got["isrc"] == "GBDUW0600009"
+    assert got["title"] == "Around the World"
+
+
+def test_sonovault_track_search_skips_without_key(monkeypatch):
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "")
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"results": [{"isrc": "X"}]})
+    assert app.sonovault_track_search("a", "b") == {}
+
+
+def test_build_song_report_spotify_sonovault_fills_isrc(monkeypatch):
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
+    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+        "id": "t1", "title": "The Fate of Ophelia", "artist": "Taylor Swift",
+        "album": "The Life of a Showgirl: The Encore", "album_id": "", "album_url": "",
+        "isrc": "", "date": "2026-09-25", "length": "4:00",
+        "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    def fake_fetch(url, headers=None):
+        if "api.sonovault.now" in url:
+            return {"results": [{"id": 9, "title": "The Fate of Ophelia", "artists": [{"name": "Taylor Swift"}], "isrc": "USUMV2503024", "iswc": "T-123.456.789-0"}]}
+        if url.startswith("https://itunes.apple.com/search"):
+            return {"results": []}
+        return {"results": []}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
+    assert report["song"]["isrc"] == "USUMV2503024"
+    assert report["song"]["iswc"] == "T-123.456.789-0"
+    assert any("Sonovault" in note for note in report["api_notes"])
+
+
+def test_build_song_report_spotify_sonovault_miss_stays_silent(monkeypatch):
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
+    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+        "id": "t1", "title": "夜に駆ける", "artist": "YOASOBI", "album": "夜に駆ける",
+        "album_id": "", "album_url": "", "isrc": "", "date": "", "length": "4:21",
+        "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    def fake_fetch(url, headers=None):
+        if "api.sonovault.now" in url:
+            return {"results": []}
+        if url.startswith("https://itunes.apple.com/search"):
+            return {"results": []}
+        return {"results": []}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
+    assert report["song"]["isrc"] == ""
+    assert not any("Sonovault" in err.get("error", "") for err in report["source_errors"])
+
+
+# ------------------------------------------------------------ Soundcharts ISRC 补查
+
+def test_soundcharts_by_platform_id_parses_envelope(monkeypatch):
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    seen: list[str] = []
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: (
+        seen.append(url) or {
+            "type": "song",
+            "object": {
+                "uuid": "abc-123",
+                "name": "The Fate of Ophelia",
+                "isrc": {"value": "USUMV2503024", "countryCode": "US"},
+                "iswcs": ["T-123.456.789-0"],
+                "mainArtists": [{"name": "Taylor Swift", "appUrl": "https://soundcharts.com/app/artist/x"}],
+                "appUrl": "https://soundcharts.com/app/song/abc-123",
+                "duration": 240,
+            },
+        }
+    ))
+    got = app.soundcharts_song_by_platform_id("spotify", "t1")
+    assert got["isrc"] == "USUMV2503024"
+    assert got["iswc"] == "T-123.456.789-0"
+    assert got["title"] == "The Fate of Ophelia"
+    assert got["source_url"] == "https://soundcharts.com/app/song/abc-123"
+    assert "song/by-platform/spotify/t1" in seen[0]
+
+
+def test_soundcharts_platform_code_mapping(monkeypatch):
+    # 歌曲级 Apple 链接的 Soundcharts 平台代码是 itunes（不是 apple-music）
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    seen: list[str] = []
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: (
+        seen.append(url) or {"object": {"uuid": "u", "name": "x", "isrc": {"value": "USX"}}}
+    ))
+    got = app.soundcharts_song_by_platform_id("apple", "42")
+    assert got["isrc"] == "USX"
+    assert "by-platform/itunes/42" in seen[0]
+
+
+def test_soundcharts_skips_without_credentials(monkeypatch):
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"object": {"uuid": "x"}})
+    assert app.soundcharts_song_by_platform_id("spotify", "t1") == {}
+
+
+def test_soundcharts_unknown_source_skipped(monkeypatch):
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"object": {"uuid": "x"}})
+    assert app.soundcharts_song_by_platform_id("youtube", "t1") == {}
+
+
+def test_soundcharts_no_match_returns_empty(monkeypatch):
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"message": "No song found"})
+    assert app.soundcharts_song_by_platform_id("spotify", "t1") == {}
+
+
+def test_soundcharts_404_not_found_stays_silent(monkeypatch):
+    # 404 = 曲库未收录，属于正常结果，静默返回 {}（不抛错、不上 warning）
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    def not_found(url, headers=None):
+        raise app.FetchError("HTTP Error 404: Not Found")
+    monkeypatch.setattr(app, "fetch_json", not_found)
+    assert app.soundcharts_song_by_platform_id("spotify", "t1") == {}
+
+
+def test_soundcharts_401_raises_for_caller(monkeypatch):
+    # 401 = 凭据问题，需要让调用方知道（区别于未收录）
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "wrong-key")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    def unauthorized(url, headers=None):
+        raise app.FetchError("HTTP Error 401: Unauthorized")
+    monkeypatch.setattr(app, "fetch_json", unauthorized)
+    try:
+        app.soundcharts_song_by_platform_id("spotify", "t1")
+        raise AssertionError("401 应该抛 FetchError")
+    except app.FetchError:
+        pass
+
+
+def test_build_song_report_spotify_soundcharts_fills_isrc_when_sonovault_misses(monkeypatch):
+    # Sonovault 未命中（日文原文标题不索引等）→ Soundcharts 按平台曲目 ID 直查补上
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+        "id": "t1", "title": "夜に駆ける", "artist": "YOASOBI", "album": "夜に駆ける",
+        "album_id": "", "album_url": "", "isrc": "", "date": "", "length": "4:21",
+        "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    def fake_fetch(url, headers=None):
+        if "api.sonovault.now" in url:
+            return {"results": []}
+        if "customer.api.soundcharts.com" in url:
+            return {"object": {
+                "uuid": "sc-uuid-1",
+                "name": "夜に駆ける",
+                "isrc": {"value": "JPP301900716"},
+                "iswcs": ["T-101.234.567-8"],
+                "mainArtists": [{"name": "YOASOBI"}],
+                "appUrl": "https://soundcharts.com/app/song/sc-uuid-1",
+            }}
+        if url.startswith("https://itunes.apple.com/search"):
+            return {"results": []}
+        return {"results": []}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
+    assert report["song"]["isrc"] == "JPP301900716"
+    assert report["song"]["iswc"] == "T-101.234.567-8"
+    assert any("Soundcharts" in note for note in report["api_notes"])
+
+
+def test_build_song_report_sonovault_hit_does_not_call_soundcharts(monkeypatch):
+    # Sonovault 命中时不触发 Soundcharts（Soundcharts 计费，省调用）
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    calls: list[str] = []
+    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+        "id": "t1", "title": "The Fate of Ophelia", "artist": "Taylor Swift", "album": "a",
+        "album_id": "", "album_url": "", "isrc": "", "date": "", "length": "4:00",
+        "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
+    })
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    def fake_fetch(url, headers=None):
+        calls.append(url)
+        if "api.sonovault.now" in url:
+            return {"results": [{"id": 9, "title": "The Fate of Ophelia", "artists": [{"name": "Taylor Swift"}], "isrc": "USUMV2503024", "iswc": "T-9"}]}
+        if url.startswith("https://itunes.apple.com/search"):
+            return {"results": []}
+        return {"results": []}
+    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
+    assert report["song"]["isrc"] == "USUMV2503024"
+    assert not any("customer.api.soundcharts.com" in u for u in calls)
+
+
+# ------------------------------------------------------------ /api/usage 用量查询
+
+def test_collect_usage_status_not_configured(monkeypatch):
+    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
+    status = app.collect_usage_status()
+    assert status["sources"]["sonovault"]["configured"] is False
+    assert status["sources"]["soundcharts"]["configured"] is False
+    assert "usage" not in status["sources"]["soundcharts"]
+    assert status["sources"]["sonovault"]["usage_api"] is False
+
+
+def test_collect_usage_status_soundcharts_fetches_usage(monkeypatch):
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "cid")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    monkeypatch.setattr(app, "soundcharts_team_usage", lambda: {
+        "quota": {"limit": 1000, "used": 1, "remaining": 999, "period": "", "end_period_date": None},
+        "rate_limit": {"limit_per_minute": 10000, "used": 0, "remaining": 10000, "reset_in_seconds": 37},
+    })
+    status = app.collect_usage_status()
+    assert status["sources"]["soundcharts"]["auth"] == "oauth"
+    assert status["sources"]["soundcharts"]["usage"]["quota"]["remaining"] == 999
+    assert status["sources"]["sonovault"]["configured"] is False
+
+
+def test_soundcharts_team_usage_parses_envelope(monkeypatch):
+    class FakeResp:
+        def read(self):
+            return json.dumps({
+                "type": "usage",
+                "object": {
+                    "quota": {"limit": 1000, "used": 1, "remaining": 999, "period": "", "endPeriodDate": None},
+                    "rateLimit": {"limitPerMinute": 10000, "used": 0, "remaining": 10000, "resetInSeconds": 37},
+                },
+                "errors": [],
+            }).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeOpener:
+        def open(self, req, timeout=20):
+            return FakeResp()
+
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "cid")
+    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
+    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
+    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {"token": "tok", "expires_at": app.time.time() + 3600})
+    monkeypatch.setattr(app, "GUARDED_OPENER", FakeOpener())
+    got = app.soundcharts_team_usage()
+    assert got["quota"]["remaining"] == 999
+    assert got["rate_limit"]["limit_per_minute"] == 10000
+    assert got["rate_limit"]["reset_in_seconds"] == 37
