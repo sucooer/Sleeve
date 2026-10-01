@@ -854,6 +854,10 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
 .cover-sources,
 .lookup-links,
 .catalog-candidates { margin-top: var(--s4); min-width: 0; }
+/* 当前手工品番：提示文字 + 清除按钮排在同一行。容器必须是 flex，里面的 .btn-sm
+   才能靠 align-self: center 对齐文字基线（见上方 .btn-sm 的注释）。 */
+.manual-catalog { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.manual-catalog code { padding: 1px 5px; border-radius: 5px; background: rgba(87, 242, 135, .12); color: var(--green); font: 600 11px/1.7 var(--mono); }
 .artist-credits:first-child,
 .rg-candidates:first-child,
 .cover-sources:first-child { margin-top: 0; }
