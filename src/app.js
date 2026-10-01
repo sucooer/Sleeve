@@ -179,6 +179,9 @@ function renderReport(report) {
     return;
   }
   currentReport = report;
+  // #results 与 #song-results 是同级区块：上一次查询可能是单曲报告，切回专辑报告时
+  // 必须显式收起它，否则两份报告会同时挂在页面上。
+  $("#song-results").classList.add("hidden");
   $("#results").classList.remove("hidden");
   $("#report-title").textContent = report.release.title || "建库资料";
   $("#report-subtitle").textContent = `${report.release.artist || "未知艺人"} · ${report.release.date || "日期待确认"} · ${report.confidence.overall} confidence`;
@@ -214,7 +217,17 @@ function renderReport(report) {
   $("#external-links").innerHTML = (externalLinks.length ? `<table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${externalLinks.map((item) => `<tr><td>${escapeHtml(item.site)}</td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table><p class="muted">关系类型照抄；「自动发现」的链接添加前请核对。</p>` : `<div class="empty">还没有可用的外部链接。</div>`) + (platformSearch.length ? `<div class="lookup-hint">下面这些平台还没拿到链接，点开搜索页找到后把 URL 贴回输入框即可自动归类。${report.external_platform_search_note ? escapeHtml(report.external_platform_search_note) : ""}</div><div class="lookup-actions">${platformSearch.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.name)} 搜索</a>`).join("")}</div>` : "");
 
   const candidates = report.catalog_candidates || [];
-  $("#catalog-candidates").innerHTML = candidates.length ? `<div class="lookup-hint">品番候选（点击采用为手工品番）：</div><div class="lookup-actions">${candidates.map((item) => `<button class="lookup-link use-catalog" data-value="${escapeHtml(item.value)}">${escapeHtml(item.value)}（${escapeHtml(item.source)}）</button>`).join("")}</div><div class="lookup-hint">${escapeHtml(candidates[0].note)}</div>` : "";
+  // 手工品番是模块级状态，会跟着之后的每一次查询（后端拿非空的手工值覆盖自动抓到的品番）。
+  // 没有清除入口的话，点过一次「品番候选」就再也回不到自动结果了：这里显示当前生效的值，
+  // 并给出清除按钮。
+  const catalogBlocks = [];
+  if (manualCatalogValue) {
+    catalogBlocks.push(`<div class="lookup-hint manual-catalog">当前手工品番：<code>${escapeHtml(manualCatalogValue)}</code>（覆盖了自动抓到的品番，之后的查询也会带上）<button class="secondary btn-sm clear-catalog" type="button">清除手工品番</button></div>`);
+  }
+  if (candidates.length) {
+    catalogBlocks.push(`<div class="lookup-hint">品番候选（点击采用为手工品番）：</div><div class="lookup-actions">${candidates.map((item) => `<button class="lookup-link use-catalog" data-value="${escapeHtml(item.value)}">${escapeHtml(item.value)}（${escapeHtml(item.source)}）</button>`).join("")}</div><div class="lookup-hint">${escapeHtml(candidates[0].note)}</div>`);
+  }
+  $("#catalog-candidates").innerHTML = catalogBlocks.join("");
 
   const links = report.lookup_links || [];
   $("#lookup-links").innerHTML = links.length ? `<div class="lookup-hint">没找到品番时，用下面的入口核对：站内搜索最直接；若商店返回 403（OTOTOY 的搜索页会拦脚本流量），改用 Google 站内搜索。找到专辑后把商店链接贴回上方即可自动取品番。</div><div class="lookup-actions">${links.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">${escapeHtml(item.name)}</a>`).join("")}</div>` : "";
@@ -640,6 +653,14 @@ $("#lookup-form").addEventListener("submit", (event) => {
 if (lookupButton) lookupButton.addEventListener("click", () => runLookup());
 
 document.addEventListener("click", (event) => {
+  const clearCatalog = event.target.closest(".clear-catalog");
+  if (clearCatalog) {
+    // 清掉手工品番后重跑：报告的品番会回到自动抓取的结果，地址栏里的 catalog 参数
+    // 也会在 runLookup 的 replaceState 里被丢掉（手工值为空时不再写入）。
+    manualCatalogValue = "";
+    runLookup();
+    return;
+  }
   const useCatalog = event.target.closest(".use-catalog");
   if (useCatalog) {
     manualCatalogValue = useCatalog.dataset.value || "";
@@ -920,6 +941,7 @@ document.addEventListener("click", async (event) => {
 // 左上角品牌徽标（Sleeve 图标）：点击返回首页 —— 收起报告区、清掉分享链接参数、回到首屏。
 $(".brand").addEventListener("click", () => {
   $("#results").classList.add("hidden");
+  $("#song-results").classList.add("hidden");
   currentReport = null;
   try { history.replaceState(null, "", location.pathname); } catch (error) { /* file:// 等环境不允许改地址栏时忽略 */ }
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;

@@ -1064,6 +1064,7 @@ def test_build_song_report_mb_fails_but_credits_ok(monkeypatch):
                                    ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"], "apple", "6814997402")
     assert report["recording"] == {}
     assert report["source_errors"], "MB 失败要记进诊断"
+    assert "不可用" in " ".join(report["api_notes"]), "MB 自己挂了就得说不可用（原来这条提示反而不写）"
     assert report["work_relations"]["status"] == "credits_only"
     assert report["work_relations"]["apple_credits"], "credits 与 work 关系合一展示"
     assert report["lyrics_candidates"][0]["track"] == "The Fate of Ophelia"
@@ -1454,3 +1455,194 @@ def test_soundcharts_team_usage_parses_envelope(monkeypatch):
     assert got["quota"]["remaining"] == 999
     assert got["rate_limit"]["limit_per_minute"] == 10000
     assert got["rate_limit"]["reset_in_seconds"] == 37
+
+
+# ------------------------------------------------------------------ 审查修复回归
+#
+# 这里是 2026-09-27 审查报告点名问题的回归测试（分支 fix/review-findings）：
+# 认证有效期解析、/api/login 的限流、MusicBrainz 提示的口径、
+# 专辑展开页（?i=）的 Apple Credits 采集。同样不出网。
+
+
+def test_parse_auth_ttl_falls_back_to_default_when_unset():
+    """未设置 = 12h，不是「永不过期」。
+
+    原来写成 `int(os.environ.get("SLEEVE_AUTH_TTL", "43200") or "0")`：默认值是对的，
+    但只要环境里出现 `SLEEVE_AUTH_TTL=`（写了没填，compose 里很常见），空串就被
+    `or "0"` 变成 0 = 永不过期，正好和上面注释的承诺相反。
+    """
+    assert app.AUTH_TTL_DEFAULT == 12 * 60 * 60
+    assert app.parse_auth_ttl(None) == app.AUTH_TTL_DEFAULT
+    assert app.parse_auth_ttl("") == app.AUTH_TTL_DEFAULT
+    assert app.parse_auth_ttl("   ") == app.AUTH_TTL_DEFAULT
+
+
+def test_parse_auth_ttl_keeps_explicit_values():
+    assert app.parse_auth_ttl("0") == 0, "显式 0 才是唯一的「永不过期」写法"
+    assert app.parse_auth_ttl(" 3600 ") == 3600
+    assert app.parse_auth_ttl("abc") == app.AUTH_TTL_DEFAULT, "非法值退回默认，绝不静默变成永不过期"
+
+
+@pytest.fixture
+def rate_limited_server():
+    """带认证 + 3 次/60 秒限流的实例：验证 /api/login 也吃限流。"""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    env = _app_env(
+        SLEEVE_HOST="0.0.0.0",
+        SLEEVE_PUBLISH_BIND="127.0.0.1",
+        SLEEVE_PORT=str(port),
+        SLEEVE_CACHE_DIR=tempfile.mkdtemp(prefix="sleeve-test-cache-"),
+        SLEEVE_AUTH="sleeve:secret",
+        SLEEVE_RATE_LIMIT="3/60",
+    )
+    process, lines = _spawn_app(env)
+    try:
+        deadline = time.time() + 20
+        ready = False
+        while time.time() < deadline and not ready:
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
+                    ready = response.status == 200
+            except (OSError, URLError):
+                time.sleep(0.2)
+        assert ready, "\n".join(lines)
+        yield port
+    finally:
+        _stop(process)
+
+
+def _post_login(port: int, body: str) -> str:
+    return _raw_request(
+        port,
+        "POST /api/login HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+        f"Content-Length: {len(body.encode('utf-8'))}\r\n\r\n{body}",
+    )
+
+
+def test_login_is_rate_limited(rate_limited_server):
+    """/api/login 只豁免「凭据校验」，限流必须照常覆盖。
+
+    原来 require_access 把它和 /api/health 一起提前 return True，于是这个唯一用凭据
+    换凭据的入口既不校验也不限速 —— 口令枚举可以无限打。
+    """
+    body = json.dumps({"username": "sleeve", "password": "wrong"})
+    statuses = [_post_login(rate_limited_server, body).splitlines()[0] for _ in range(4)]
+    assert " 401 " in statuses[0], statuses
+    assert " 401 " in statuses[2], statuses
+    assert " 429 " in statuses[3], statuses
+
+    # /api/health 是探针，不受限流影响：否则一有人爆破口令，容器健康检查就跟着失败
+    with urlopen(f"http://127.0.0.1:{rate_limited_server}/api/health", timeout=2) as response:
+        assert response.status == 200
+
+
+def test_song_report_mb_note_ignores_other_source_errors(monkeypatch):
+    """别的来源报错时，MB 提示不能跟着说「不可用」。
+
+    这条提示原来拿 source_errors 判断 MB 的成败，而 source_errors 里混着
+    Apple/Spotify/Deezer/Sonovault 的错误：只要有一个附带来源挂了，MB 就会被
+    说成「本次环境中不可用」，把用户往「MB 挂了，别查了」的方向带。
+    """
+    itunes = _fake_itunes_track()
+    itunes["results"][0].pop("isrc")     # 没有 ISRC 才会去问 Sonovault
+    monkeypatch.setattr(app, "fetch_json", lambda url: itunes)
+    monkeypatch.setattr(app, "mb_request", lambda path, params: _mb_song_payload(path, params))
+    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
+
+    def boom(*args, **kwargs):
+        raise app.FetchError("sonovault down")
+
+    monkeypatch.setattr(app, "sonovault_track_search", boom)
+    report = app.build_song_report("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
+                                   ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"], "apple", "6814997402")
+
+    notes = " ".join(report["api_notes"])
+    assert any(item["source"] == "Sonovault" for item in report["source_errors"]), "非 MB 的失败仍然要记诊断"
+    assert "MusicBrainz recording 搜索正常" in notes, notes
+    assert "不可用" not in notes, notes
+
+
+def _album_url(track_id: str = "6814997402", album_id: str = "6814997249") -> str:
+    return f"https://music.apple.com/us/album/the-life-of-a-showgirl-the-encore/{album_id}?i={track_id}"
+
+
+def _album_nets(monkeypatch, linked_collection_id: str = "6814997249"):
+    """把专辑报告的出网全部换成桩，返回 (credits_calls, leaked)。
+
+    leaked 记录任何「本该被桩挡住、却仍想连网」的调用：漏网就是测试本身的问题。
+    """
+    credits_calls: list[tuple[str, str]] = []
+    leaked: list[object] = []
+
+    class NoNetwork:
+        def open(self, *args, **kwargs):
+            leaked.append(args[0] if args else None)
+            raise app.FetchError("测试不应出网")
+
+    def fake_fetch_json(url: str) -> dict:
+        if "lookup?id=6814997402" in url:
+            return {"results": [{
+                "wrapperType": "track", "trackId": 6814997402, "trackName": "The Fate of Ophelia",
+                "artistName": "Taylor Swift", "collectionId": int(linked_collection_id),
+                "collectionName": "The Life of a Showgirl: The Encore",
+                "trackViewUrl": "https://music.apple.com/us/song/the-fate-of-ophelia/6814997402",
+            }]}
+        if "lookup?id=6814997249" in url:
+            return {"results": [
+                {"wrapperType": "collection", "collectionId": 6814997249, "collectionName": "The Life of a Showgirl: The Encore",
+                 "artistName": "Taylor Swift", "releaseDate": "2026-09-25", "trackCount": 1, "copyright": "℗ 2026",
+                 "primaryGenreName": "Pop", "collectionViewUrl": "https://music.apple.com/us/album/x/6814997249"},
+                {"wrapperType": "track", "trackId": 6814997402, "trackName": "The Fate of Ophelia", "artistName": "Taylor Swift",
+                 "collectionId": 6814997249, "trackNumber": 1, "discNumber": 1, "trackTimeMillis": 226000},
+            ]}
+        return {"results": []}
+
+    def fake_credits(url: str, track_title: str = "") -> dict:
+        credits_calls.append((url, track_title))
+        return _fake_apple_credit(track_title)
+
+    monkeypatch.setattr(app, "fetch_text", lambda url, *a, **k: "<html><head><title>Album</title></head><body></body></html>")
+    monkeypatch.setattr(app, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(app, "mb_request", lambda path, params: {})
+    monkeypatch.setattr(app, "mb_reverse_release_ids", lambda url: [])
+    monkeypatch.setattr(app, "spotify_search", lambda query: [])
+    monkeypatch.setattr(app, "sonovault_track_search", lambda *a, **k: {})
+    monkeypatch.setattr(app, "soundcharts_song_by_platform_id", lambda *a, **k: {})
+    monkeypatch.setattr(app, "collect_apple_credits", fake_credits)
+    monkeypatch.setattr(app, "GUARDED_OPENER", NoNetwork())
+    return credits_calls, leaked
+
+
+def test_album_expansion_link_collects_apple_credits(monkeypatch):
+    """专辑展开页（?i=<trackId>）要真的去抓那首曲目的 Apple Credits。
+
+    原来写成 `extract_apple_song_id(primary_url) if not apple_id else ""`：能走到这里的
+    Apple 链接要么是纯单曲（已经被路由进单曲报告）、要么自带 albumId，所以 apple_song_id
+    恒为空 —— 后面整段 iTunes 定位 + collect_apple_credits 全不可达，专辑报告的
+    work_relations 永远没有 apple_credits，而 Checklist 还照写「另有 Apple 页面 Credits
+    可交叉核对」。
+    """
+    credits_calls, leaked = _album_nets(monkeypatch)
+    report = app.build_report("", _album_url())
+
+    assert not leaked, leaked
+    assert report["tracks"], "专辑报告应带上曲目"
+    assert credits_calls and credits_calls[0][1] == "The Fate of Ophelia", credits_calls
+    assert report["work_relations"]["apple_credits"], "?i= 指到具体曲目时 credits 才可能抓到"
+    assert report["work_relations"]["status"] == "credits_only"
+    assert report["work_relations"]["apple_credits"][0]["groups"], "credits 要带上词曲 / 制作分组"
+
+
+def test_album_link_skips_credits_when_i_belongs_to_another_album(monkeypatch):
+    """?i= 指向别的专辑时宁可不抓，也不能把那张专辑的 credits 贴到本张上。"""
+    credits_calls, leaked = _album_nets(monkeypatch, linked_collection_id="999")
+
+    report = app.build_report("", _album_url())
+
+    assert not leaked, leaked
+    assert not credits_calls, credits_calls
+    assert report["work_relations"]["apple_credits"] == []
+    warnings = " ".join(item.get("warning", "") for item in report["source_warnings"])
+    assert "不一致" in warnings and "6814997402" in warnings, warnings

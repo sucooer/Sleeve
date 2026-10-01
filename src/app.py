@@ -196,11 +196,26 @@ AUTH_HEADER = "Basic " + base64.b64encode(AUTH_RAW.encode("utf-8")).decode("asci
 # 服务端是无状态 Basic 校验，本身没有「会话」概念；TTL 作为约定下发给前端，
 # 前端把登录时间戳与 TTL 一起保存，到点自动清除本地凭据并回到登录页。
 # 未设置时沿用默认 12h（安全管理上，不设 = 永不过期是一个坑）。
-try:
-    AUTH_TTL = int(os.environ.get("SLEEVE_AUTH_TTL", "43200") or "0")
-except ValueError:
-    AUTH_TTL = 43200
-    print(f"[warn] SLEEVE_AUTH_TTL 应为秒数，忽略当前值，使用默认 43200。", flush=True)
+AUTH_TTL_DEFAULT = 12 * 60 * 60
+
+
+def parse_auth_ttl(raw: str | None) -> int:
+    """解析 SLEEVE_AUTH_TTL：未设置 / 空串 / 非法值一律回落默认 12h；显式 "0" 才是永不过期。
+
+    空串必须走默认值：`SLEEVE_AUTH_TTL=` 这种「写了但没填」的配置很常见，
+    当成 0 就等于悄悄把凭据改成永不过期，正好与上一行的约定相反。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return AUTH_TTL_DEFAULT
+    try:
+        return int(text)
+    except ValueError:
+        print(f"[warn] SLEEVE_AUTH_TTL 应为秒数，忽略当前值「{text}」，使用默认 {AUTH_TTL_DEFAULT}。", flush=True)
+        return AUTH_TTL_DEFAULT
+
+
+AUTH_TTL = parse_auth_ttl(os.environ.get("SLEEVE_AUTH_TTL"))
 
 # 逃生阀：确要在可信网络里无鉴权开放时才显式设 1
 ALLOW_OPEN_NO_AUTH = os.environ.get("SLEEVE_AUTH_ALLOW_OPEN", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -3098,10 +3113,9 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
 
     # ---- 2. MusicBrainz recording 搜索（歌名 + 艺人）----
     recording: dict[str, Any] = {}
-    mb_reachable = False
+    mb_error = ""
     try:
         rows = mb_search_recording(song["title"], song["artist"])
-        mb_reachable = True
         if rows:
             best = rows[0]
             recording = {
@@ -3116,9 +3130,16 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
                 "suggested": len(rows) > 1,
             }
     except FetchError as exc:
-        source_errors.append({"source": "MusicBrainz", "error": f"recording 搜索失败：{exc}"})
-    if mb_reachable:
-        api_notes.append("MusicBrainz recording 搜索正常（MB 限速 1 req/s，慢属正常）" if not source_errors else "MusicBrainz 查询在本次环境中不可用")
+        mb_error = f"recording 搜索失败：{exc}"
+        source_errors.append({"source": "MusicBrainz", "error": mb_error})
+    # 这条提示只看 MusicBrainz 自己的成败：source_errors 里混着 Apple/Spotify/Deezer/
+    # Sonovault 的错误，拿它判断 MB 会把「正常」说成「不可用」；而 MB 真的挂了时
+    # （mb_error 非空）又一条提示都不写，恰好漏掉最该看到的那句。
+    if mb_error:
+        api_notes.append("MusicBrainz 查询在本次环境中不可用")
+    elif song["title"] or song["artist"]:
+        # 歌名与艺人都为空时 mb_search_recording 直接返回空列表、根本没发请求，别报「正常」
+        api_notes.append("MusicBrainz recording 搜索正常（MB 限速 1 req/s，慢属正常）")
 
     # ---- 3. Work 关系：recording → work / composer / lyricist ----
     work_relations: dict[str, Any] = {
@@ -3317,23 +3338,24 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     page_hint = next((item for item in page_summaries if item.get("status") == "ok" and (item.get("title") or item.get("artist"))), {})
     release_id, release_group_id = extract_mbids(primary_url)
     apple_id = extract_apple_id(primary_url)
-    # 单曲链接：trackId 不是专辑 ID，先 iTunes lookup 定位所属专辑，再走专辑流程
-    # （专辑匹配上 MusicBrainz 后，work relationships 查询才能跟着跑起来）
-    apple_song_album: dict[str, Any] = {}
-    apple_song_id = extract_apple_song_id(primary_url) if not apple_id else ""
-    if apple_song_id:
+    # Apple 的「专辑展开页」`.../album/<slug>/<albumId>?i=<trackId>`：apple_id 是专辑，
+    # `?i=` 指向用户当前打开的那一轨。词曲/制作 Credits 只渲染在歌曲页（专辑页不渲染），
+    # collect_apple_credits() 会按 trackId 改写成歌曲页去抓，所以这里要先把 trackId 取出来，
+    # 并借 iTunes lookup 拿到曲目名做 Credits 的标题（拿不到就留空，报告里回落成「(歌曲)」）。
+    # 纯单曲链接（没有 albumId）到不了这里：上面 detect_song_url() 已把它路由进单曲报告。
+    apple_track_id = extract_apple_song_id(primary_url) if apple_id else ""
+    apple_track_album: dict[str, Any] = {}
+    if apple_track_id:
         try:
-            apple_song_album = itunes_album_from_song(apple_song_id)
+            apple_track_album = itunes_album_from_song(apple_track_id)
         except FetchError as exc:
-            source_warnings.append({"source": "Apple/iTunes", "warning": f"单曲链接解析失败：{exc}"})
-        if apple_song_album:
-            apple_id = apple_song_album["collection_id"]
-            sources.append({
-                "name": "Apple 单曲链接",
-                "status": "ok",
-                "url": primary_url,
-                "summary": {"note": f"输入为单曲链接，已按 iTunes lookup 定位到所属专辑《{apple_song_album.get('collection_name')}》（collectionId {apple_song_album.get('collection_id')}），后续以该专辑的数据为准"},
-            })
+            source_warnings.append({"source": "Apple/iTunes", "warning": f"链接里的曲目信息读取失败，Apple Credits 会缺曲目名：{exc}"})
+        linked_album = apple_track_album.get("collection_id")
+        if linked_album and linked_album != apple_id:
+            # `?i=` 指的是另一张专辑里的曲目（分享链接里常见）：那份 credits 属于那张专辑，
+            # 贴到本张上就是错数据，宁可留空。
+            source_warnings.append({"source": "Apple/iTunes", "warning": f"链接里的 ?i={apple_track_id} 属于专辑 {linked_album}，与链接的专辑 {apple_id} 不一致，已跳过 Apple Credits 采集"})
+            apple_track_id = ""
     spotify_id = next((found for url in source_urls if (found := extract_spotify_id(url))), "")
     spotify_data: dict[str, Any] = {}
     if spotify_id:
@@ -3352,8 +3374,8 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     if deezer_data and not page_hint and deezer_id:
         # 输入就是 Deezer 链接时数据来自 API 而非页面解析，用它顶替 page_hint，避免误报「页面解析失败」
         page_hint = deezer_data
-    title_hint = first(page_hint.get("title")) or first(spotify_data.get("title")) or first(deezer_data.get("title")) or album_name or first(apple_song_album.get("collection_name"))
-    artist_hint = first(page_hint.get("artist")) or artist_name.strip() or first(spotify_data.get("artist")) or first(deezer_data.get("artist")) or first(apple_song_album.get("artist"))
+    title_hint = first(page_hint.get("title")) or first(spotify_data.get("title")) or first(deezer_data.get("title")) or album_name or first(apple_track_album.get("collection_name"))
+    artist_hint = first(page_hint.get("artist")) or artist_name.strip() or first(spotify_data.get("artist")) or first(deezer_data.get("artist")) or first(apple_track_album.get("artist"))
 
     apple_url_country = next((extract_apple_country(url) for url in source_urls if extract_apple_country(url)), "")
     # 默认按链接自带的区；apple_id 分支里查到数据后按实际数据来源区更新（整单切换后可能不再是链接区）
@@ -3544,9 +3566,10 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
         })
     # Apple Music 页面 Credits：作曲/作词/制作/表演 —— 版权方侧数据，不依赖 MB，
     # 建一个「MB 里还不存在的 work」时正是靠它挂 relationship。
+    # 专辑报告只在链接指向具体曲目（`?i=` 展开页）时才抓得到：专辑页本身不渲染 Credits。
     apple_credits: list[dict[str, Any]] = []
-    if apple_song_album.get("track_name"):
-        credit = collect_apple_credits(primary_url, apple_song_album.get("track_name"))
+    if apple_track_id:
+        credit = collect_apple_credits(primary_url, first(apple_track_album.get("track_name")))
         if credit:
             apple_credits.append(credit)
     # Work relationships：逐轨查询 MusicBrainz 的 work / composer / lyricist 关系。
@@ -3783,11 +3806,16 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     if not page_label and not first(mb_data.get("label")) and not derived_imprint and not spotify_label:
         missing_fields.append({"field": "Label / imprint", "hint": "平台只给了版权方，厂牌（imprint）需要人工确认"})
     if work_relations["items"]:
+        if work_relations["failed"] or work_relations["limited"]:
+            work_tail = f"{work_relations['failed']} 首查询失败、{work_relations['limited']} 首超出查询预算未查，请在 MusicBrainz 页面人工确认。"
+        elif work_relations.get("apple_credits"):
+            work_tail = "另有 Apple 页面 Credits 可交叉核对。"
+        else:
+            # 不能无条件写「另有 Apple 页面 Credits」：专辑链接没指向具体曲目（无 ?i=）时根本没抓到
+            work_tail = "本次没有抓到 Apple 页面 Credits，词曲 / 制作信息请从官方页面人工补齐。"
         work_review_reason = (
             f"已自动查询 {work_relations['query_count']} 首曲目，找到 {work_relations['work_count']} 个 work / {work_relations['relation_count']} 条关系，人工核对后挂载；"
-            + (f"{work_relations['failed']} 首查询失败、{work_relations['limited']} 首超出查询预算未查，请在 MusicBrainz 页面人工确认。"
-               if work_relations["failed"] or work_relations["limited"]
-               else "另有 Apple 页面 Credits 可交叉核对。")
+            + work_tail
         )
     elif work_relations.get("apple_credits"):
         work_review_reason = "MB 尚无此曲目的 work/recording：下列 Apple Music Credits（作曲/作词/制作/表演）可直接作为新建 Work 与 Recording 关系挂载的依据，挂载前人工核对。"
@@ -3952,16 +3980,20 @@ class Handler(BaseHTTPRequestHandler):
         认证**不挡静态资源**：前端 shell（public/ 与 /app.js、/styles.css）必须
         无需凭据即可加载，否则自定义登录页无从呈现。认证只覆盖 /api/* 数据入口
         （真正会泄漏数据、或作为开放代理扇出到上游的部分）；/api/health 与
-        /api/login 豁免 —— 前者是健康探针（响应里带 auth 标志供前端探测），
-        后者是登录入口，凭据在 do_POST 内自行校验。
+        /api/login 豁免认证本身 —— 前者是健康探针（响应里带 auth 标志供前端探测），
+        后者是登录入口，凭据在 handle_login 内自行校验。
+        注意 /api/login 只豁免「凭据校验」这一层，**限流照常生效**：它是唯一用
+        凭据换凭据的入口，若一起放开，就等于给口令枚举留了条无限速的通道。
         401 不再携带 WWW-Authenticate 头：那会触发浏览器原生 Basic 弹窗，
         自定义登录页依赖的是普通 401 响应。
-        限流（见下）只覆盖 /api/*。
+        限流（见下）覆盖所有 /api/*，包括 /api/login。
         """
         path = urlparse(self.path).path
-        if path == "/api/health" or path == "/api/login":
+        if path == "/api/health":
             return True
-        if AUTH_HEADER and path.startswith("/api/"):
+        # /api/login 不能在这里一起 return True：它只需要跳过下面的 Authorization
+        # 校验（凭据由 handle_login 自己核对），限流必须继续走。
+        if AUTH_HEADER and path.startswith("/api/") and path != "/api/login":
             supplied = self.headers.get("Authorization", "").encode("utf-8")
             # 常量时间比较，避免按字符逐位泄漏口令信息（成本为零，没有理由不用）
             if not hmac.compare_digest(supplied, AUTH_HEADER.encode("utf-8")):
