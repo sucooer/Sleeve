@@ -349,6 +349,7 @@ h1 {
 .field-hint { margin-top: var(--s2); color: var(--ink-5); font-size: 12px; line-height: 1.5; }
 
 input[type="text"],
+input[type="password"],
 input:not([type]),
 textarea {
   width: 100%;
@@ -361,7 +362,7 @@ textarea {
   outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
-input[type="text"], input:not([type]) { height: 48px; }
+input[type="text"], input[type="password"], input:not([type]) { height: 48px; }
 textarea {
   resize: vertical;
   min-height: 156px;
