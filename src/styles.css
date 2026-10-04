@@ -487,9 +487,16 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   background: var(--bg-1);
 }
 /*
- * 吸顶工具栏上方留了 12px 缝隙（top: var(--s3)），滚动时下面的卡片会从这条缝里
- * 露出来 —— 看起来就像内容「穿过」了工具栏。吸顶时用一条与工具栏同色的实底把
- * 缝隙盖住：内容滚到工具栏下沿就消失，正好与左侧 REPORT INDEX 栏的顶端齐平。
+ * 吸顶工具栏与视口顶部之间留了 12px 缝隙（top: var(--s3)），滚动时下面的卡片会从
+ * 这条缝里露出来 —— 看起来就像内容「穿过」了工具栏。吸顶时用一条与工具栏同色的
+ * 实底把「视口顶部 → 左栏 REPORT INDEX 的吸顶线（--anchor-offset）」整段盖住：
+ * 内容滚到左栏顶端那条线就消失，与左侧栏对齐。
+ *
+ * 为什么要一路盖到 --anchor-offset、而不是只补 12px 的缝：
+ *   1. 只补缝的话，工具栏自己的上边框 + 圆角会在接缝处露出一道边（看起来还是「黑边」）；
+ *   2. 补到左栏线才和 --anchor-offset 一致 —— 锚点落点、左栏吸顶线、内容消失线三者对齐。
+ * 实底从 -1px 开始横向铺满，把工具栏上/下边框与圆角一并盖掉，拼成一个无缝整块；
+ * 左右各多 1px 是为了压住工具栏的左右描边。
  *
  * 只在 .is-stuck（app.js 实测工具栏已吸顶）时才画：工具栏还没吸顶时它在文档流里，
  * 这条实底会在它上方露出一条多余的色带。
@@ -497,11 +504,15 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
 .reportbar.is-stuck::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(var(--s3) * -1 - 2px);
-  height: calc(var(--s3) + 2px);
+  left: -1px;
+  right: -1px;
+  top: calc((var(--s3) + 4px) * -1);
+  height: calc(var(--anchor-offset) + 4px);
   background: var(--bg-1);
+  /* 必须在工具栏自己的文字之下：z-index: auto 的绝对定位子元素会画在 in-flow 文字
+     之上，把整块工具栏的字盖住。-1 让它落在「工具栏背景之上、文字之下」这一层，
+     同时仍在页面内容之上（父级 .reportbar 有自己的层叠上下文）。 */
+  z-index: -1;
   pointer-events: none;
 }
 .report-info { min-width: 0; }
