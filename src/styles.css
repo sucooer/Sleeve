@@ -862,6 +862,8 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
 .artist-credits:first-child,
 .rg-candidates:first-child,
 .cover-sources:first-child { margin-top: 0; }
+/* 封面 Edit note 草稿：贴在来源列表下方，和上面留出与其它区块一致的距离 */
+.cover-note { margin-top: var(--s4); }
 
 /* ---------- 表格 ---------- */
 .table-wrap,

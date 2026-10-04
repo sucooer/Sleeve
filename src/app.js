@@ -209,6 +209,11 @@ function renderReport(report) {
   const coverSources = report.release.cover_sources || [];
   $("#cover-sources").innerHTML = coverSources.length ? `<div class="lookup-hint">各平台原图（提交前取最大的一张，不要裁剪或放大）：</div><div class="lookup-actions">${coverSources.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">${escapeHtml(item.site)} 原图</a>`).join("")}${report.release.cover_upload_url ? `<a class="lookup-link" href="${escapeHtml(safeHref(report.release.cover_upload_url))}" target="_blank" rel="noreferrer" title="${escapeHtml(report.release.cover_upload_url)}">给已存在的 Release 补图 →</a>` : ""}</div><p class="muted">${coverSources.map((item) => `${escapeHtml(item.site)}：${escapeHtml(item.note)}`).join(" · ")}</p>` : "";
 
+  // 封面 Edit note 草稿：原本挂在 11「Edit note 草稿」里，和封面/来源隔了半页；
+  // 搬进本卡、紧贴来源列表，写封面说明时不用来回滚。
+  const coverNote = (report.edit_notes || {}).cover || "";
+  $("#cover-note").innerHTML = coverNote ? `<div class="note-block"><div class="note-head"><span>cover</span><button class="copy-note" data-note="${escapeHtml(coverNote)}">复制</button></div><pre>${escapeHtml(coverNote)}</pre></div>` : "";
+
   $("#source-comparison").innerHTML = (report.source_comparison || []).map((row) => `<div class="comparison-row ${escapeHtml(row.status)}"><div class="comparison-field">${escapeHtml(row.field)}</div><div class="comparison-status ${escapeHtml(row.status)}">${row.status === "match" ? "一致" : row.status === "conflict" ? "冲突" : "缺失"}</div><div class="comparison-values">${row.values.length ? row.values.map((item) => `<div><span>${escapeHtml(item.source)}：</span><strong>${escapeHtml(display(item.value))}</strong></div>`).join("") : `<span>${escapeHtml(row.note)}</span>`}</div></div>`).join("") || `<div class="empty">没有足够的来源用于对比。</div>`;
 
   const externalLinks = report.external_links || [];
@@ -264,7 +269,7 @@ function renderReport(report) {
   $("#tracks").innerHTML = tracks.length ? tracks.map((track, index) => `<tr><td>${escapeHtml(trackNumberLabel(track, index, multiDisc))}</td><td><strong>${escapeHtml(track.title)}</strong></td><td>${escapeHtml(track.artist || "跟随发行艺人")}</td><td>${escapeHtml(track.length || "未确认")}</td><td>${track.isrc ? `<code>${escapeHtml(track.isrc)}</code>` : `<span class="empty">未确认</span>`}</td><td>${track.recording_mbid ? `<a href="https://musicbrainz.org/recording/${escapeHtml(track.recording_mbid)}" target="_blank" rel="noreferrer">${escapeHtml(track.recording_mbid.slice(0, 8))}…</a>` : `<span class="empty">新建 / 待确认</span>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">没有找到曲目表，请提供更具体的发行链接。</td></tr>`;
 
   $("#checklist").innerHTML = report.manual_review.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}" /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("");
-  $("#edit-notes").innerHTML = Object.entries(report.edit_notes).map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
+  $("#edit-notes").innerHTML = Object.entries(report.edit_notes).filter(([name]) => name !== "cover").map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
   const workRels = report.work_relations || { status: "skipped", notice: "", items: [], work_count: 0, relation_count: 0 };
   const wrCount = $("#work-relations-count");
   if (wrCount) {
@@ -272,6 +277,11 @@ function renderReport(report) {
     wrCount.textContent = creditsN ? `Apple Credits ${creditsN} 曲` : (workRels.status === "skipped" ? "未查询" : `${workRels.work_count || 0} work / ${workRels.relation_count || 0} 关系`);
   }
   $("#work-relations").innerHTML = renderWorkRelations(workRels);
+  // 11b「Work 关系与 Credits」是曲目级信息（Apple 歌曲页 Credits + 逐轨 work 关系），
+  // 输入链接是专辑链接（整张发行）时不显示：整张的 work 关系与 11「Edit note 草稿」
+  // 里的 work 草稿重复，且专辑页本身也抓不到 Apple Credits。
+  const m11b = $("#m11b");
+  if (m11b) m11b.classList.add("hidden");
   const lyricsCandidates = report.lyrics_candidates || [];
   $("#lyrics-candidates").innerHTML = lyricsCandidates.length ? renderLyricsCandidates(lyricsCandidates) : "";
   $("#diagnostics").innerHTML = [...report.confidence.notes.map((note) => `<div class="diagnostic">${escapeHtml(note)}</div>`), ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`), ...report.source_errors.map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`), ...report.api_notes.map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`)].join("");
