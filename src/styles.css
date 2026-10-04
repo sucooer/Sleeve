@@ -481,10 +481,12 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   gap: var(--s5);
   padding: 18px 22px;
   margin-bottom: var(--s6);
-  /* 纯实底：内容从吸顶栏底下经过时被干净盖住。
-     之前 93% 半透明 + blur，滚动中的卡片标题透出毛玻璃边缘，
-     截图里看起来就是「工具栏和下面内容重叠」。实底后边界干净切断。 */
-  background: var(--bg-1);
+  /* 半透明毛玻璃：与顶栏、左导航同一套玻璃语言（backdrop-filter 在下面
+     .rail, .reportbar 的共享规则里，取 --blur）。
+     以前这里刻意用纯实底，是因为「滚动中的卡片标题透出毛玻璃边缘」看着像
+     「工具栏和下面内容重叠」；现在上方已经有吸顶遮罩（.reportbar-shade）把
+     内容磨成雾面，再做成半透明玻璃也不会回到那个观感。 */
+  background: rgba(30, 31, 34, .55);
 }
 /*
  * 吸顶遮罩（.reportbar-shade）
