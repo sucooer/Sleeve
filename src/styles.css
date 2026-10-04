@@ -487,34 +487,31 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   background: var(--bg-1);
 }
 /*
- * 吸顶工具栏与视口顶部之间留了 12px 缝隙（top: var(--s3)），滚动时下面的卡片会从
- * 这条缝里露出来 —— 看起来就像内容「穿过」了工具栏。吸顶时用一条与工具栏同色的
- * 实底把「视口顶部 → 左栏 REPORT INDEX 的吸顶线（--anchor-offset）」整段盖住：
- * 内容滚到左栏顶端那条线就消失，与左侧栏对齐。
+ * 吸顶遮罩（.reportbar-shade）
+ * ------------------------------------------------------------
+ * 工具栏是浮条：sticky top 是 12px，跟视口顶部之间留着一条缝，滚动时卡片会从
+ * 这条缝里露出来，看起来就像内容「穿过」了工具栏。这里放一块与页面背景同色的
+ * 实底，从视口顶部一直盖到左栏 REPORT INDEX 的吸顶线（--anchor-offset）：
+ * 内容滚到那条线就消失，与左栏顶端、锚点落点对齐。
  *
- * 为什么要一路盖到 --anchor-offset、而不是只补 12px 的缝：
- *   1. 只补缝的话，工具栏自己的上边框 + 圆角会在接缝处露出一道边（看起来还是「黑边」）；
- *   2. 补到左栏线才和 --anchor-offset 一致 —— 锚点落点、左栏吸顶线、内容消失线三者对齐。
- * 实底从 -1px 开始横向铺满，把工具栏上/下边框与圆角一并盖掉，拼成一个无缝整块；
- * 左右各多 1px 是为了压住工具栏的左右描边。
+ * 它排在 .reportbar 之前、z-index 比工具栏低，所以只是「背景」——工具栏的圆角、
+ * 描边、阴影照常露在上面，浮条外观不变（不用把工具栏自己的盒子盖掉）。
+ * height 配等量负 margin-bottom：占位为 0，不挤动工具栏与卡片。
  *
- * 只在 .is-stuck（app.js 实测工具栏已吸顶）时才画：工具栏还没吸顶时它在文档流里，
- * 这条实底会在它上方露出一条多余的色带。
+ * 只在 .is-stuck（app.js 实测工具栏已吸顶）时显示：没吸顶时它在文档流里，
+ * 显出来会盖住工具栏下方的卡片。
  */
-.reportbar.is-stuck::before {
-  content: "";
-  position: absolute;
-  left: -1px;
-  right: -1px;
-  top: calc((var(--s3) + 4px) * -1);
-  height: calc(var(--anchor-offset) + 4px);
+.reportbar-shade {
+  position: sticky;
+  top: 0;
+  z-index: 29;
+  height: var(--anchor-offset);
+  margin-bottom: calc(var(--anchor-offset) * -1);
   background: var(--bg-1);
-  /* 必须在工具栏自己的文字之下：z-index: auto 的绝对定位子元素会画在 in-flow 文字
-     之上，把整块工具栏的字盖住。-1 让它落在「工具栏背景之上、文字之下」这一层，
-     同时仍在页面内容之上（父级 .reportbar 有自己的层叠上下文）。 */
-  z-index: -1;
   pointer-events: none;
+  opacity: 0;
 }
+.reportbar-shade.is-stuck { opacity: 1; }
 .report-info { min-width: 0; }
 .report-info h2 { margin: 4px 0 0; font-size: 20px; color: var(--ink-1); }
 .report-info p { margin: 2px 0 0; color: var(--ink-5); font-size: 12px; }
@@ -1143,9 +1140,9 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
     align-items: flex-start;
     padding: 16px 18px;
   }
-  /* 这一档工具栏不再吸顶（position: static），上方的补缝条没有意义，
-     而且它的绝对定位会跑到别的参照物上，直接关掉 */
-  .reportbar.is-stuck::before { display: none; }
+  /* 这一档工具栏不再吸顶（position: static），遮罩没有意义，
+     而且它的 sticky 会跑到别的参照物上，直接关掉 */
+  .reportbar-shade { display: none; }
   .report-actions { justify-content: flex-start; max-width: none; }
 
   .row { grid-template-columns: minmax(0, 1fr); }

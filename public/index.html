@@ -20,7 +20,7 @@
        靠上面那支 apple-touch-icon 加下面这行标题 -->
   <link rel="manifest" href="/site.webmanifest" />
   <meta name="apple-mobile-web-app-title" content="Sleeve" />
-  <link rel="stylesheet" href="/styles.css?v=20261004e" />
+  <link rel="stylesheet" href="/styles.css?v=20261004f" />
 </head>
 <body>
   <!-- 背景光斑：毛玻璃需要有东西可以采样 -->
@@ -139,6 +139,10 @@
     <section id="results" class="results hidden">
 
       <!-- 报告工具栏 -->
+      <!-- 吸顶遮罩：工具栏吸顶后，把「视口顶部 → 左栏吸顶线」整段用背景色盖住，
+           内容滚到这里就消失。放在工具栏之前、z-index 更低，所以工具栏的圆角与
+           描边仍露在它上面（遮罩只是背景）。 -->
+      <div class="reportbar-shade" aria-hidden="true"></div>
       <div class="reportbar">
         <div class="report-info">
           <div class="eyebrow">GENERATED DOSSIER</div>
@@ -398,6 +402,7 @@
     <!-- ===================== 单曲报告（song 链接） ===================== -->
     <section id="song-results" class="results hidden" aria-label="单曲建库资料">
 
+      <div class="reportbar-shade" aria-hidden="true"></div>
       <div class="reportbar">
         <div class="report-info">
           <div class="eyebrow">SONG DOSSIER</div>
@@ -532,6 +537,6 @@
   <!-- 数据源用量小徽标（右下角）：Soundcharts 配额余量，配置后才显示 -->
   <div id="usage-badge" class="usage-badge hidden" aria-live="polite"></div>
 
-  <script src="/app.js?v=20261004e"></script>
+  <script src="/app.js?v=20261004f"></script>
 </body>
 </html>
