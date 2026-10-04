@@ -486,6 +486,24 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
      截图里看起来就是「工具栏和下面内容重叠」。实底后边界干净切断。 */
   background: var(--bg-1);
 }
+/*
+ * 吸顶工具栏上方留了 12px 缝隙（top: var(--s3)），滚动时下面的卡片会从这条缝里
+ * 露出来 —— 看起来就像内容「穿过」了工具栏。吸顶时用一条与工具栏同色的实底把
+ * 缝隙盖住：内容滚到工具栏下沿就消失，正好与左侧 REPORT INDEX 栏的顶端齐平。
+ *
+ * 只在 .is-stuck（app.js 实测工具栏已吸顶）时才画：工具栏还没吸顶时它在文档流里，
+ * 这条实底会在它上方露出一条多余的色带。
+ */
+.reportbar.is-stuck::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--s3) * -1 - 2px);
+  height: calc(var(--s3) + 2px);
+  background: var(--bg-1);
+  pointer-events: none;
+}
 .report-info { min-width: 0; }
 .report-info h2 { margin: 4px 0 0; font-size: 20px; color: var(--ink-1); }
 .report-info p { margin: 2px 0 0; color: var(--ink-5); font-size: 12px; }
@@ -1114,6 +1132,9 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
     align-items: flex-start;
     padding: 16px 18px;
   }
+  /* 这一档工具栏不再吸顶（position: static），上方的补缝条没有意义，
+     而且它的绝对定位会跑到别的参照物上，直接关掉 */
+  .reportbar.is-stuck::before { display: none; }
   .report-actions { justify-content: flex-start; max-width: none; }
 
   .row { grid-template-columns: minmax(0, 1fr); }

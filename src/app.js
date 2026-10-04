@@ -522,6 +522,40 @@ function syncBarOffset() {
   window.addEventListener("resize", syncBarOffset);
 })();
 
+/*
+ * 工具栏是否已经吸顶，写回 .is-stuck。
+ *
+ * styles.css 里 .reportbar.is-stuck::before 是一条补缝条：工具栏吸顶后与视口顶部
+ * 之间有 12px 缝隙，滚动时卡片会从缝里露出来（看起来像穿过了工具栏），需要盖住。
+ * 但工具栏还没吸顶时它在文档流里，这条实底会在它上方露出多余的色带，所以必须
+ * 等真正吸顶再画。判据就是「工具栏顶边已经贴到它自己的 sticky top」。
+ * 滚动事件按 rAF 合并，避免每个 scroll 事件都同步读布局。
+ */
+(function watchBarStuck() {
+  const bars = Array.from(document.querySelectorAll(".reportbar"));
+  if (!bars.length) return;
+  const stickyTop = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--s3")) || 0;
+  let ticking = false;
+  const update = () => {
+    ticking = false;
+    const top = stickyTop();
+    bars.forEach((bar) => {
+      // 隐藏的报告区（offsetParent 为 null）不参与；这一档工具栏非 sticky 时也不画
+      if (bar.offsetParent === null) return;
+      const sticky = getComputedStyle(bar).position === "sticky";
+      bar.classList.toggle("is-stuck", sticky && bar.getBoundingClientRect().top <= top + 0.5);
+    });
+  };
+  const onScroll = () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(update);
+  };
+  update();
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll, { passive: true });
+})();
+
 function hasMultipleDiscs(tracks) {
   return new Set((tracks || []).map((track) => track.disc).filter(Boolean)).size > 1;
 }
