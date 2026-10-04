@@ -3466,9 +3466,13 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
                 release = mb_request(f"release/{selected.get('id')}", {"inc": "artist-credits+labels+recordings+release-groups+media+url-rels", "fmt": "json"})
                 mb_data = normalize_mb_release(release)
         if mb_data:
+            # 「反向查询」是拿到 MBID 的途径，不是来源：它指向的商店页本身已经作为
+            # 输入链接页面列在 sources 里，再单列一条既重复、名字（MusicBrainz）又和
+            # URL（商店页）对不上。只在 summary 里留一句溯源，列表不再多一行。
+            mb_summary = dict(mb_data)
             if reverse_used:
-                sources.append({"name": "MusicBrainz 反向查询", "status": "ok", "url": reverse_used, "summary": {"note": f"通过链接反查到 MusicBrainz 发行 {mb_data.get('release_mbid')}"}})
-            sources.append({"name": "MusicBrainz", "status": "ok", "url": f"https://musicbrainz.org/release/{mb_data.get('release_mbid')}", "summary": mb_data})
+                mb_summary["reverse_lookup"] = f"通过链接 {reverse_used} 反查到本发行"
+            sources.append({"name": "MusicBrainz", "status": "ok", "url": f"https://musicbrainz.org/release/{mb_data.get('release_mbid')}", "summary": mb_summary})
         elif not release_id and not release_group_id:
             source_warnings.append({"source": "MusicBrainz", "warning": "没有找到对应发行；可先用本资料人工建 Release，再回填 MBID"})
     except FetchError as exc:
@@ -3535,9 +3539,12 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
         source_warnings.append({"source": "Deezer", "warning": f"{deezer_data['tracks_error']} —— 逐轨 ISRC / 时长可能不完整，可稍后重试或改用其它来源核对"})
 
     if deezer_data:
+        # 「Deezer 反查」和下面的「Deezer」指向同一个 URL，是一条重复行；反查只是
+        # 拿到这张专辑的手段，合并成一行，溯源写进 summary。
+        deezer_summary = dict(deezer_data)
         if deezer_reverse:
-            sources.append({"name": "Deezer 反查", "status": "ok", "url": deezer_data.get("url") or "", "summary": {"note": f"通过{deezer_reverse}找到 Deezer 专辑 {deezer_data.get('url')}"}})
-        sources.append({"name": "Deezer", "status": "ok", "url": deezer_data.get("url") or "", "summary": deezer_data})
+            deezer_summary["reverse_lookup"] = f"通过{deezer_reverse}反查到本专辑"
+        sources.append({"name": "Deezer", "status": "ok", "url": deezer_data.get("url") or "", "summary": deezer_summary})
 
     if spotify_data:
         sources.append({"name": "Spotify", "status": "ok", "url": spotify_data.get("url") or "", "summary": spotify_data})
