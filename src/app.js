@@ -525,10 +525,10 @@ function syncBarOffset() {
 /*
  * 工具栏是否已经吸顶，写回 .is-stuck（工具栏与它前面的遮罩一起切）。
  *
- * styles.css 里 .reportbar-shade 是一块铺在工具栏之下的实底：工具栏吸顶后与视口
- * 顶部之间有 12px 缝隙，滚动时卡片会从缝里露出来（看起来像穿过了工具栏），需要
- * 盖住。但工具栏还没吸顶时它在文档流里，遮罩显出来会盖住工具栏下方的卡片，所以
- * 必须等真正吸顶再显示。判据就是「工具栏顶边已经贴到它自己的 sticky top」。
+ * styles.css 里 .reportbar-shade 是一层铺在工具栏之下的毛玻璃：工具栏吸顶后与
+ * 视口顶部之间有 12px 缝隙，滚动时卡片会从缝里露出来（看起来像穿过了工具栏），
+ * 需要盖住。但工具栏还没吸顶时它在文档流里，遮罩显出来会盖住工具栏下方的卡片，
+ * 所以必须等真正吸顶再显示。判据就是「工具栏顶边已经贴到它自己的 sticky top」。
  * 滚动事件按 rAF 合并，避免每个 scroll 事件都同步读布局。
  */
 (function watchBarStuck() {
@@ -540,12 +540,12 @@ function syncBarOffset() {
     ticking = false;
     const top = stickyTop();
     bars.forEach((bar) => {
-      // 隐藏的报告区（offsetParent 为 null）不参与；这一档工具栏非 sticky 时也不显示遮罩
+      // 隐藏的报告区（offsetParent 为 null）不参与；≤980px 那一档工具栏非 sticky，也不显示遮罩
       const stuck = bar.offsetParent !== null
         && getComputedStyle(bar).position === "sticky"
         && bar.getBoundingClientRect().top <= top + 0.5;
       bar.classList.toggle("is-stuck", stuck);
-      // 遮罩是工具栏的前一个兄弟：它只负责铺背景色，跟着工具栏一起切换
+      // 遮罩是工具栏的前一个兄弟，跟着一起切
       const shade = bar.previousElementSibling;
       if (shade && shade.classList.contains("reportbar-shade")) shade.classList.toggle("is-stuck", stuck);
     });

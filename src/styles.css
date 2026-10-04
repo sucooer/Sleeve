@@ -490,24 +490,28 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
  * 吸顶遮罩（.reportbar-shade）
  * ------------------------------------------------------------
  * 工具栏是浮条：sticky top 是 12px，跟视口顶部之间留着一条缝，滚动时卡片会从
- * 这条缝里露出来，看起来就像内容「穿过」了工具栏。这里放一块与页面背景同色的
- * 实底，从视口顶部一直盖到左栏 REPORT INDEX 的吸顶线（--anchor-offset）：
- * 内容滚到那条线就消失，与左栏顶端、锚点落点对齐。
+ * 这条缝里露出来，看起来就像内容「穿过」了工具栏。这里放一层遮罩，从视口顶部
+ * 一直盖到左栏 REPORT INDEX 的吸顶线（--anchor-offset）：内容滚到那条线就消失，
+ * 与左栏顶端、锚点落点对齐。
  *
- * 它排在 .reportbar 之前、z-index 比工具栏低，所以只是「背景」——工具栏的圆角、
- * 描边、阴影照常露在上面，浮条外观不变（不用把工具栏自己的盒子盖掉）。
- * height 配等量负 margin-bottom：占位为 0，不挤动工具栏与卡片。
+ * 用与顶栏同款的白雾玻璃（半透明 + backdrop-filter），不做纯色实底：纯色实底会把
+ * 左上角那团紫色光斑整块切掉，看起来就是一条突兀的「黑边」；玻璃让背景（含光斑）
+ * 透上来，滚动中的卡片则被磨成雾面，不再「穿过」工具栏。
  *
- * 只在 .is-stuck（app.js 实测工具栏已吸顶）时显示：没吸顶时它在文档流里，
- * 显出来会盖住工具栏下方的卡片。
+ * position: fixed + 左右铺满：遮罩要盖住整条视口宽度 —— 只跟内容同宽的话，两侧
+ * 与光斑的交界会留下竖直硬边。z-index 29 压在工具栏（30）之下，所以工具栏的圆角、
+ * 描边、阴影照旧露在上面。只在 .is-stuck（app.js 实测工具栏已吸顶）时显示。
  */
 .reportbar-shade {
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 29;
+  left: 0;
+  right: 0;
   height: var(--anchor-offset);
-  margin-bottom: calc(var(--anchor-offset) * -1);
-  background: var(--bg-1);
+  z-index: 29;
+  background: rgba(30, 31, 34, .28);
+  backdrop-filter: blur(30px) saturate(1.15);
+  -webkit-backdrop-filter: blur(30px) saturate(1.15);
   pointer-events: none;
   opacity: 0;
 }
@@ -1140,9 +1144,8 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
     align-items: flex-start;
     padding: 16px 18px;
   }
-  /* 这一档工具栏不再吸顶（position: static），遮罩没有意义，
-     而且它的 sticky 会跑到别的参照物上，直接关掉 */
-  .reportbar-shade { display: none; }
+  /* 这一档工具栏不再吸顶（position: static），app.js 的判据里 position !== "sticky"
+     会让 .reportbar-shade 一直停在 opacity: 0，不用另外关。 */
   .report-actions { justify-content: flex-start; max-width: none; }
 
   .row { grid-template-columns: minmax(0, 1fr); }
