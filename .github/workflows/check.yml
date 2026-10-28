@@ -1,0 +1,65 @@
+name: 测试与静态检查
+
+# 每次 push / PR 都跑。原先只有打 tag 才触发 release.yml（只构建镜像），
+# 仓库里**没有任何**测试闸门 —— 补的测试进不了 CI 就没有护栏意义。
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # 依赖装在 uv 的缓存里，比 pip 慢一点点，但重复跑时快很多
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov ruff
+
+      # ---- 静态检查 ----
+      # 先跑 ruff：语法错误、未定义名、未用的 import 这类问题当场拦下，
+      # 不用等测试跑到一半才炸。
+      - name: ruff 静态检查
+        run: ruff check src tests
+
+      # ---- 单元测试 ----
+      # 测试全部不出网（只解析字面量 IP、只连 127.0.0.1），可以放心跑。
+      # 覆盖率作为「参考值」上报而不是闸门：当前基线约 57%，
+      # 真正要卡的是「不许下降」，用 fail_under 钉住下限。
+      - name: 单元测试
+        run: pytest tests -q --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: 上传覆盖率报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+      # ---- 冒烟：服务真的能起来并响应 ----
+      # 光有单元测试不够：路由、静态资源、启动守卫这些只在进程起来后才存在。
+      - name: 冒烟测试（启动服务并请求 /api/health）
+        run: |
+          python src/app.py &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/api/health > /dev/null; then
+              echo "服务已就绪"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8765/api/health
+          curl -fsS -o /dev/null -w "index.html HTTP %{http_code}\n" http://127.0.0.1:8765/

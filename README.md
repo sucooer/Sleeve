@@ -50,6 +50,7 @@ sleeve/
 | `SONOVAULT_API_KEY` | 空 | Sonovault 免费 API 密钥：平台没给 ISRC 时按「艺人 + 标题」交叉引用补 ISRC / ISWC（93M 录音目录） |
 | `SOUNDCHARTS_CLIENT_ID` / `SOUNDCHARTS_CLIENT_SECRET` | 空 | Soundcharts OAuth 凭据（推荐）：Sonovault 未命中时按平台曲目 ID 直查 ISRC / ISWC / 溯源 |
 | `SOUNDCHARTS_APP_ID` / `SOUNDCHARTS_API_KEY` | 空 | Soundcharts legacy 凭据（官方已标弃用但仍可用），与 OAuth 二选一 |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | 空 | Spotify 官方 Web API 凭据：配了则优先走官方接口（反代随时可能下线）；不配则用 groover 免凭据反代 |
 
 ### ISRC / ISWC 补查（可选数据源）
 
@@ -72,6 +73,18 @@ sleeve/
 无鉴权的 `/api/lookup` 等于一个开放代理，任何人拿到地址都能借你的 IP 扇出 30~50 个出网请求。
 
 `/api/health` 永远豁免鉴权与限流，方便接探针。
+
+### Spotify 数据源（可选）
+
+专辑报告里的 Spotify 数据默认走 `groover.co` 的免凭据反代：**即开即用，但那是
+第三方未公开的接口**，改版 / 加防爬盾 / 换路径都可能让它静默下线。
+
+配了 `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` 后改为**优先走 Spotify 官方
+Web API**，官方通道失败（无凭据 / 401 / 网络抖动）自动回落到反代，两条路都能出数据。
+
+> 官方 API 与反代的响应形状不同（官方没有 `label` 字段，厂牌只能从版权行推）。
+> 应用内部已加规整层，两条通道对外的结构完全一致；官方通道拿不到厂牌时厂牌留空，
+> **不会伪造值**。
 
 ## 部署
 

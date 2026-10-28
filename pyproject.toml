@@ -1,0 +1,38 @@
+[project]
+name = "sleeve"
+version = "0.0.0"
+description = "MusicBrainz 建库资料准备工具"
+requires-python = ">=3.11"
+
+# 运行时零第三方依赖（容器用 alpine 最小镜像直接跑，无需 pip install）。
+# 下面的依赖组只服务于开发期的测试与静态检查。
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+
+[tool.ruff.lint]
+# E501（行宽）交给 formatter 之外的判断：代码里有大量超长行（多数是中文注释与
+# 字符串），一律报错会把 CI 变成噪音。选一套针对「真实缺陷」的规则。
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+    "E741",   # 变量名用 l/I/O —— 与 MB / ISO 代码里的领域缩写冲突
+    "B008",   # 函数调用默认值里的常量（URL_SUFFIX 之类）是有意为之
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件里大量 monkeypatch 与临时文件路径，规则放宽
+"tests/*" = ["B011"]
+
+[tool.ruff.format]
+quote-style = "double"

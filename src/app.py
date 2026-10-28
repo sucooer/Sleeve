@@ -14,6 +14,7 @@ import threading
 import time
 import unicodedata
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from html import escape, unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import count
@@ -160,14 +161,126 @@ class CacheStats(threading.local):
     ThreadingHTTPServer 是「一个连接一个线程」，所以线程局部实际上就等于请求局部：
     原来的全局 dict 会被并发查询互相清零，报告里那句「本次有 N 个命中缓存」
     就成了假数据（谁最后清零、谁最后写报告，全看调度顺序）。
+
+    但线程局部在**线程池**里会失效：并行抓多个来源时，命中计数记在 worker 线程
+    自己的副本上，请求线程读到的一直是 0 —— 报告里「本次有 N 个命中缓存」整条消失。
+    所以并行场景下 worker 必须把计数带回来，由请求线程汇总（见 merge_into）。
     """
 
     def __init__(self) -> None:
         self.hit = 0
         self.miss = 0
 
+    def snapshot(self) -> tuple[int, int]:
+        return (self.hit, self.miss)
+
+    def merge_into(self, other: CacheStats) -> None:
+        """把另一个计数器的增量并进来（worker → 主线程汇总用）。"""
+        other.hit += self.hit
+        other.miss += self.miss
+
 
 CACHE_STATS = CacheStats()
+
+
+def ensure_cache_dir() -> None:
+    """建缓存目录，并收紧权限。
+
+    缓存默认落在系统公共临时目录（/tmp/sleeve-cache）。多用户共享的主机上，
+    公共目录里的缓存文件可能被同机的其他本地用户读取或篡改 —— 而缓存内容
+    是出网请求的响应，篡改它等于让报告出现**看似合法的错误数据**。
+
+    非 Windows 上显式设 0o700（仅属主可读写）。Windows 没有 POSIX 权限位，
+    靠 ACL 控制，跳过即可（容器里跑在 appuser 上，卷权限由 Dockerfile 保证）。
+
+    幂等：权限已经对时不再重复 chmod（每次写缓存都调它，stat 比 chmod 便宜得多）。
+    """
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            return
+        mode = CACHE_DIR.stat().st_mode & 0o777
+        if mode != 0o700:
+            os.chmod(CACHE_DIR, 0o700)
+    except OSError:
+        # 目录建不出来 / 改不了权限：缓存只是加速手段，不该让服务起不来
+        pass
+
+
+# ------------------------------------------------------------------ 并行抓取
+#
+# 一次专辑查询要扇出到好几个互不相干的来源（用户贴的商店页、iTunes、Spotify、
+# Deezer），它们各自独立、互不依赖，串行等着就是白等 —— 慢的那个决定总时长。
+#
+# 但**并行是有前提的**，不能照着「这些源互不依赖」想当然：
+#   1) Apple（itunes_album_by_id）**依赖**其它源的 artist_hint / title_hint ——
+#      它的整单区域切换（链接区 → JP 区 → 美区）就是拿 artist_hint 跟各区返回的
+#      艺人名比对的。artist_hint 为空时整条判据失效，日文专辑会被错误丢弃或污染。
+#      所以 Apple 必须放到**第二阶段**，等其它源的结果齐了再查。
+#   2) CACHE_STATS 是线程局部的：worker 线程里的命中计数记在 worker 自己的副本上，
+#      请求线程读到的一直是 0，报告里「本次有 N 个命中缓存」整条消失。
+#      所以 worker 必须把自己那份计数带回来，由请求线程汇总。
+#   3) MusicBrainz 有 1 req/s 的硬限制，**绝不能**放进线程池并发打，
+#      MB 的限速与锁见 mb_request。
+
+PARALLEL_FETCH_MAX_WORKERS = 6
+
+
+class _FetchOutcome:
+    """一个并行任务的结果：值 + 该 worker 线程的缓存计数增量。"""
+
+    __slots__ = ("value", "error", "hit_delta", "miss_delta")
+
+    def __init__(self, value: Any, error: Exception | None, hit_delta: int, miss_delta: int) -> None:
+        self.value = value
+        self.error = error
+        self.hit_delta = hit_delta
+        self.miss_delta = miss_delta
+
+
+def _run_one(task: Any) -> _FetchOutcome:
+    """在 worker 线程里跑一个任务，并把该线程的缓存计数增量带回来。
+
+    CACHE_STATS 是 threading.local，worker 线程天然有一份独立的副本 ——
+    正因为如此，命中数必须显式带回主线程，否则统计会静默变成 0。
+
+    只捕获 Exception（不捕获 BaseException）：KeyboardInterrupt / SystemExit
+    应当继续往外抛，由主线程处理，不能在 worker 里被吞掉。
+    """
+    before = CACHE_STATS.snapshot()
+    try:
+        value = task()
+        error: Exception | None = None
+    except Exception as exc:  # noqa: BLE001 - 单个来源失败不该拖垮整次查询
+        value = None
+        error = exc
+    after = CACHE_STATS.snapshot()
+    return _FetchOutcome(value, error, after[0] - before[0], after[1] - before[1])
+
+
+def run_parallel(tasks: list[Any]) -> list[_FetchOutcome]:
+    """并行跑一批互不依赖的任务，返回与入参同序的结果。
+
+    失败不抛异常：单个来源挂了就返回 error，由调用方决定是降级还是记警告 ——
+    这与串行版各来源各自 try/except 的语义一致。
+    """
+    if not tasks:
+        return []
+    if len(tasks) == 1:
+        return [_run_one(tasks[0])]
+    workers = min(PARALLEL_FETCH_MAX_WORKERS, len(tasks))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sleeve-fetch") as executor:
+        return list(executor.map(_run_one, tasks))
+
+
+def merge_cache_stats(deltas: list[tuple[int, int]]) -> None:
+    """把各 worker 的缓存计数增量汇总到当前（请求）线程。
+
+    没有这一步，并行抓取会让「本次有 N 个命中缓存」永远显示不出来。
+    """
+    for hit_delta, miss_delta in deltas:
+        CACHE_STATS.hit += hit_delta
+        CACHE_STATS.miss += miss_delta
 
 # ------------------------------------------------------------------ 访问控制
 #
@@ -293,7 +406,7 @@ def rate_limit_allow(client_ip: str) -> bool:
 
 
 def cache_key(kind: str, url: str, body: str = "") -> str:
-    return hashlib.sha1(f"{kind}|{url}|{body}".encode("utf-8")).hexdigest()
+    return hashlib.sha1(f"{kind}|{url}|{body}".encode()).hexdigest()
 
 
 def cache_load(key: str) -> Any | None:
@@ -314,7 +427,7 @@ def cache_store(key: str, payload: Any) -> None:
     if not CACHE_ENABLED:
         return
     try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_cache_dir()
         # 临时名带上线程号与一段随机串：两个并发查询写同一个 key 时不会互相踩写。
         # 踩写的后果被 cache_load 兜成 miss，不报错，但会白写一次。
         temp_path = CACHE_DIR / f"{key}.{os.getpid()}.{threading.get_ident()}.{uuid4().hex[:8]}.tmp"
@@ -473,7 +586,7 @@ class GuardedRedirectHandler(HTTPRedirectHandler):
 GUARDED_OPENER = build_opener(GuardedRedirectHandler)
 
 
-def fetch_json(url: str, headers: dict[str, str] | None = None, timeout: int = 20, retries: int = 2) -> Any:
+def fetch_json(url: str, headers: dict[str, str] | None = None, timeout: int = 20, retries: int = 2, before_attempt: Any = None) -> Any:
     if not urlparse(url or "").scheme:
         raise FetchError(f"链接不是完整 URL：{url}")
     request_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -490,6 +603,11 @@ def fetch_json(url: str, headers: dict[str, str] | None = None, timeout: int = 2
     request = Request(target, headers=request_headers)
     last_error: Exception | None = None
     for attempt in range(retries + 1):
+        # 每次**真正发起**请求前都要过一遍闸（before_attempt）。
+        # 重试也是一次真实的出网请求：限速必须覆盖重试，否则「503 → 立刻重试」
+        # 会绕过限速闸，和别的线程的请求撞在一起。
+        if before_attempt is not None:
+            before_attempt()
         try:
             with GUARDED_OPENER.open(request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8", errors="replace"))
@@ -841,7 +959,7 @@ def _soundcharts_oauth_token() -> str:
     if not (SOUNDCHARTS_CLIENT_ID and SOUNDCHARTS_CLIENT_SECRET):
         return ""
     basic = "Basic " + base64.b64encode(
-        f"{SOUNDCHARTS_CLIENT_ID}:{SOUNDCHARTS_CLIENT_SECRET}".encode("utf-8")
+        f"{SOUNDCHARTS_CLIENT_ID}:{SOUNDCHARTS_CLIENT_SECRET}".encode()
     ).decode("ascii")
     try:
         req = Request(
@@ -1113,7 +1231,6 @@ def parse_ototoy_html(html: str, url: str) -> dict[str, Any]:
     date_match = re.search(r'<p[^>]+class=["\'][^"\']*release-day[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
     label_match = re.search(r'<p[^>]+class=["\'][^"\']*label-name[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
     catalog_match = re.search(r'<p[^>]+class=["\'][^"\']*catalog-id[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
-    runtime_match = re.search(r'<p[^>]+class=["\'][^"\']*total-duration[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
     image_matches = re.findall(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', html, re.I)
     album_artist = strip_html(artist_match.group(1)) if artist_match else ""
     tracks: list[dict[str, Any]] = []
@@ -1170,6 +1287,139 @@ SPOTIFY_PROXY_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 }
 
+# ---- Spotify 官方 Web API（可选，配置了凭据就用它）----
+#
+# 默认走 groover.co 的免凭据反代：即开即用，但那是第三方未公开的接口 ——
+# 改版、加防爬盾、换路径都可能让它静默下线。配了官方凭据就走官方接口，
+# 没配就继续用反代，两条路都能出数据。
+SPOTIFY_API_BASE = "https://api.spotify.com/v1"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "").strip()
+SPOTIFY_TOKEN_CACHE: dict[str, Any] = {}
+
+
+def spotify_configured() -> bool:
+    """是否配置了 Spotify 官方凭据（全空则官方通道完全跳过）。"""
+    return bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET)
+
+
+def _spotify_oauth_token() -> str:
+    """client_credentials 换 bearer token（默认 3600s 有效），进程内缓存、失败静默。
+
+    与 Soundcharts 的实现同构：凭据只从环境变量读，绝不写进代码 / 仓库 / 日志。
+    """
+    cached = SPOTIFY_TOKEN_CACHE.get("token") or ""
+    if cached and SPOTIFY_TOKEN_CACHE.get("expires_at", 0) > time.time() + 60:
+        return cached
+    if not spotify_configured():
+        return ""
+    basic = "Basic " + base64.b64encode(
+        f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
+    ).decode("ascii")
+    try:
+        req = Request(
+            SPOTIFY_TOKEN_URL,
+            data=b"grant_type=client_credentials",
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": basic,
+            },
+            method="POST",
+        )
+        with GUARDED_OPENER.open(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        token = payload.get("access_token") if isinstance(payload, dict) else ""
+        expires_in = int(payload.get("expires_in") or 3600) if isinstance(payload, dict) else 3600
+        if token:
+            SPOTIFY_TOKEN_CACHE.update(token=token, expires_at=time.time() + expires_in)
+        return token
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError):
+        return ""
+
+
+def spotify_auth_headers() -> dict[str, str]:
+    """官方 API 的 Authorization 头；换不到 token 时返回空 dict（调用方自行降级）。"""
+    token = _spotify_oauth_token()
+    return {"Authorization": "Bearer " + token} if token else {}
+
+
+def spotify_api_get(path: str, params: dict[str, str] | None = None) -> Any:
+    """官方 Spotify Web API 的 GET；失败抛 FetchError，由调用方降级到反代。"""
+    headers = spotify_auth_headers()
+    if not headers:
+        raise FetchError("未配置 Spotify 官方凭据")
+    query = "&".join(f"{quote(key)}={quote(value)}" for key, value in (params or {}).items())
+    url = f"{SPOTIFY_API_BASE}/{path.lstrip('/')}" + (f"?{query}" if query else "")
+    return fetch_json(url, headers=headers)
+
+
+def spotify_normalize_album(data: Any) -> dict[str, Any]:
+    """把官方 API 的专辑响应规整成内部统一结构。
+
+    **这一步不能省**：官方 API 与 groover 反代的响应形状并不相同，
+    直接把官方响应当成反代响应用，会静默丢字段：
+
+      | 内部字段        | groover 反代 | 官方 API                     |
+      |-----------------|-------------|------------------------------|
+      | external_ids.upc| ✓           | ✓                            |
+      | total_tracks    | ✓           | ✓                            |
+      | tracks.items    | ✓           | ✓（在 items 数组里）          |
+      | copyrights[].text| ✓         | ✓                            |
+      | **label（厂牌）**| ✓          | **✗ 官方响应没有这个字段**    |
+      | artist_name     | ✓（单曲用） | ✗ 官方是 artists[].name       |
+
+    厂牌是从版权行推出来的（官方只有 copyrights），推不出就留空 —— 但不能
+    假装有值。调用方据此知道「官方通道拿不到厂牌」。
+    """
+    if not isinstance(data, dict) or not data.get("id"):
+        return {}
+    raw_tracks = data.get("tracks")
+    items = raw_tracks.get("items") if isinstance(raw_tracks, dict) else raw_tracks
+    tracks: list[dict[str, Any]] = []
+    for index, item in enumerate(items or [], 1):
+        if not isinstance(item, dict):
+            continue
+        artists = [first(artist.get("name")) for artist in item.get("artists") or [] if isinstance(artist, dict)]
+        tracks.append({
+            "number": str(item.get("track_number") or index),
+            "disc": str(item.get("disc_number") or ""),
+            "title": first(item.get("name")),
+            "artist": " / ".join(name for name in artists if name),
+            "length": format_duration(item.get("duration_ms")),
+            "isrc": item_isrc(item),
+            "recording_mbid": "",
+            "source": "Spotify",
+        })
+    images = data.get("images") or []
+    copyrights = [first(item.get("text")) for item in data.get("copyrights") or [] if isinstance(item, dict)]
+    external_ids = data.get("external_ids") or {}
+    upc = first(external_ids.get("upc")) if isinstance(external_ids, dict) else ""
+    # 官方没有 label 字段；厂牌只能从版权行里猜（「℗ 2021 X」/「(P) 2021 X」）
+    label = ""
+    for text in copyrights:
+        candidate = re.sub(r"^\s*[℗©(]\s*\d{4}\s*", "", text).strip(" -")
+        if candidate and not re.fullmatch(r"\d{4}", candidate):
+            label = candidate
+            break
+    return {
+        "url": first((data.get("external_urls") or {}).get("spotify")),
+        "status": "ok",
+        "title": first(data.get("name")),
+        "artist": " / ".join(first(artist.get("name")) for artist in data.get("artists") or [] if isinstance(artist, dict) and first(artist.get("name"))),
+        "date": iso_date(data.get("release_date")),
+        "label": clean_value(label),
+        "barcode": upc,
+        "upc": upc,
+        "copyrights": copyrights,
+        "track_count": data.get("total_tracks") or len(tracks),
+        "tracks": tracks,
+        "image": first((images[0] or {}).get("url")) if images and isinstance(images[0], dict) else "",
+        "source": "Spotify",
+    }
+
 
 def spotify_search(query: str, limit: int = 8, kind: str = "album") -> list[dict[str, Any]]:
     params = {"q": query, "limit": str(limit), "offset": "0", "full": "true", "type": kind}
@@ -1220,6 +1470,24 @@ def spotify_track(track_id: str) -> dict[str, Any]:
 
 
 def spotify_album(album_id: str) -> dict[str, Any]:
+    """取 Spotify 专辑数据。
+
+    两条通道：
+      1. 配了官方凭据（SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET）→ 走官方 Web API；
+      2. 官方通道失败（无凭据 / 401 / 网络）→ 回落到 groover 免凭据反代。
+
+    官方通道优先是因为反代是第三方未公开接口，随时可能下线；官方通道的响应
+    形状与反代不同，先经 spotify_normalize_album 规整再返回，两条通道对外
+    暴露的结构完全一致，调用方无需区分。
+    """
+    if spotify_configured():
+        try:
+            normalized = spotify_normalize_album(spotify_api_get(f"albums/{album_id}"))
+            if normalized:
+                return normalized
+        except FetchError:
+            # 官方通道失败不报错：静默回落到反代，保证「配不配凭据都能用」
+            pass
     data = post_json(f"{SPOTIFY_PROXY_BASE}/distantapi/spotify/getdata/", {"url": f"https://open.spotify.com/album/{album_id}"}, headers=SPOTIFY_PROXY_HEADERS)
     if not isinstance(data, dict) or not data.get("id"):
         return {}
@@ -1627,6 +1895,17 @@ def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: 
     这样「粘贴 /cn/ 的链接」：日音专辑整单按 JP 区；欧美专辑不会因 JP 区日文名与
     页面不符而被艺人校验整份丢弃。
     返回 {data, country, tracks_from, note}；完全查不到时 data 为 {}。
+
+    **探测顺序**：链接自带的区先查（这是最常命中的一区，命中就能省掉后面 3 次请求）；
+    只有它没给出「艺人名对得上 + 带完整曲目表」的理想结果时，才把剩下的区**并行**去查。
+    这样最常见的路径请求数不变（仍是一次），而「链接区缺数据」这种慢路径的等待时间
+    从「各区耗时相加」降到「最慢的那一个」。
+
+    **代价**（知情取舍）：慢路径下并行会把本来能被 break 跳过的区也发出去，
+    首次查询的上游请求数最多从 2 涨到 4。iTunes lookup 是宽松的公开接口，
+    且每个区的响应都进本地缓存（默认 TTL 1 小时），同一张碟重复查询不再出网，
+    因此这里选择用「多发几次」换「等待时间不叠加」。结果的选择语义完全不变：
+    各区仍按 chain 的顺序并入，第一个满足理想条件的区胜出。
     """
     wanted = artist_hint.strip().casefold().replace(" ", "")
     primary: dict[str, Any] = {}
@@ -1643,14 +1922,22 @@ def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: 
     preferred_tracks = False
     preferred_artist_ok = False
 
-    for code in apple_storefront_chain(preferred_country):
+    chain = apple_storefront_chain(preferred_country)
+
+    def lookup(code: str) -> dict[str, Any]:
         suffix = f"&country={code}" if code else ""
         try:
-            data = normalize_itunes(fetch_json(f"https://itunes.apple.com/lookup?id={quote(apple_id)}&entity=song{suffix}"))
+            return normalize_itunes(fetch_json(f"https://itunes.apple.com/lookup?id={quote(apple_id)}&entity=song{suffix}"))
         except FetchError:
-            continue
+            return {}
+
+    def absorb(code: str, data: dict[str, Any]) -> bool:
+        """把这个区的结果并进状态；返回 True 表示「已拿到理想结果，可以停」。"""
+        nonlocal primary, primary_country, primary_artist_ok, jp_data
+        nonlocal matched_donor, matched_donor_country, donor_data, donor_tracks, donor_country
+        nonlocal preferred_found, preferred_tracks, preferred_artist_ok
         if not first(data.get("title")):
-            continue
+            return False
         if code == "jp" and not jp_data:
             jp_data = data
         got = first(data.get("artist")).casefold().replace(" ", "")
@@ -1676,8 +1963,20 @@ def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: 
 
         # 主来源区艺人名对得上且自带完整曲目，就没有再试别的区的必要
         # （只借曲目表不算数：链接区缺曲目时，后面可能还有艺人名匹配的完整区，值得继续试）
-        if primary_artist_ok and primary.get("tracks"):
-            break
+        return bool(primary_artist_ok and primary.get("tracks"))
+
+    # 第一区（链接自带区）单独同步查：它命中就是最常见的快路径，没必要多发 3 次请求
+    done = absorb(chain[0], lookup(chain[0]))
+    if not done and len(chain) > 1:
+        rest = chain[1:]
+        outcomes = run_parallel([lambda c=code: lookup(c) for code in rest])
+        merge_cache_stats([(item.hit_delta, item.miss_delta) for item in outcomes])
+        for index, outcome in enumerate(outcomes):
+            # 仍按 chain 的顺序并入：主来源 / donor 的选取依赖「先到先得」的顺序语义
+            if outcome.error is not None:
+                continue
+            if absorb(rest[index], outcome.value or {}):
+                break
 
     if not primary:
         return {"data": {}, "country": "", "tracks_from": "", "note": ""}
@@ -1984,9 +2283,24 @@ def mb_request(path: str, params: dict[str, str]) -> Any:
     也不更新 MB_LAST_REQUEST。否则重复查询会被一串无谓的 sleep 拖慢十几秒 ——
     一次查询有十来个 MB 调用，纯等待就超过 10 秒。
 
-    限速本身必须整段上锁：全局时间戳无锁时，两个并发查询会同时读到旧值、
+    限速必须严格（全局时间戳 + 锁），否则两个并发查询会同时读到旧值、
     都判定「离上次请求已经超过 1 秒」、于是一起打过去 —— 净结果是违反 MB
     每秒 1 次的约束，然后被 503 打回来并记进 source_errors（见 api_notes）。
+
+    **锁只保护「取号」，不覆盖网络 IO**（早先的写法把 fetch_json 也塞在锁里）：
+    一次 MB 请求可能耗时 20 秒以上还带重试，锁被占住的这段时间里，
+    **所有**其他用户的 MB 查询全部排队干等 —— 单个用户查 40 首曲目的 work
+    关系就能让整台服务的 MB 通道停摆一分多钟。
+
+    改成「预约制」：持锁时按 MB_LAST_REQUEST 算出本请求的出发时刻并**预写**进
+    MB_LAST_REQUEST，随即放锁，sleep 与真正的 HTTP 请求都在锁外完成。
+    于是：
+      - 任意两个 MB 请求的实际出发间隔仍 ≥ 1.05 秒（限速约束不变）；
+      - 一个慢请求不再占着锁，别人的下一个请求可以立刻预约到后面的号；
+      - 预约时刻若已过期（前面那次慢了），下一位会等更久 —— 只会更保守，不会超速。
+
+    限速闸挂在**每一次真正发出去的请求**上（before_attempt），包括 fetch_json
+    内部的失败重试 —— 重试同样是一次真实的出网请求，漏掉它就会绕过限速。
     """
     global MB_LAST_REQUEST
     query = "&".join(f"{quote(key)}={quote(value)}" for key, value in params.items())
@@ -1996,17 +2310,24 @@ def mb_request(path: str, params: dict[str, str]) -> Any:
     if cached is not None:
         CACHE_STATS.hit += 1
         return cached
-    with MB_LOCK:
-        cached = cache_load(key)  # 等锁期间别的线程可能已经拿到并写好了，别再白等 1 秒
-        if cached is not None:
-            CACHE_STATS.hit += 1
-            return cached
-        elapsed = time.monotonic() - MB_LAST_REQUEST
-        if elapsed < 1.05:
-            time.sleep(1.05 - elapsed)
-        result = fetch_json(url, headers={"Accept": "application/json"})
-        MB_LAST_REQUEST = time.monotonic()
-    return result
+    # 预约之前再查一次：等锁期间别的线程可能已经拿到并写好了，别再白等 1 秒
+    cached = cache_load(key)
+    if cached is not None:
+        CACHE_STATS.hit += 1
+        return cached
+
+    def reserve() -> None:
+        """预约一个出发时刻；到点才真正发请求。"""
+        global MB_LAST_REQUEST
+        with MB_LOCK:
+            now = time.monotonic()
+            earliest = MB_LAST_REQUEST + 1.05
+            wait = max(0.0, earliest - now)
+            MB_LAST_REQUEST = max(now, earliest)
+        if wait > 0:
+            time.sleep(wait)
+
+    return fetch_json(url, headers={"Accept": "application/json"}, before_attempt=reserve)
 
 
 def artist_name(credit: dict[str, Any]) -> str:
@@ -2031,7 +2352,7 @@ def is_valid_ean(code: str) -> bool:
     body, check = digits[:-1], digits[-1]
     # EAN-13 and EAN-8 start with weight 1; UPC-A starts with weight 3.
     weights = [1, 3] * 6 if len(code) == 13 else ([3, 1] * 6 if len(code) == 12 else [3, 1, 3, 1, 3, 1, 3])
-    total = sum(digit * weight for digit, weight in zip(body, weights))
+    total = sum(digit * weight for digit, weight in zip(body, weights, strict=False))
     return (10 - total % 10) % 10 == check
 
 
@@ -2980,6 +3301,84 @@ def search_candidates(album_name: str, artist_name: str = "") -> dict[str, Any]:
     }
 
 
+def song_recording_edit_note(
+    song: dict[str, Any],
+    recording: dict[str, Any],
+    source_urls: list[str],
+    isrc_provenance: str = "",
+    apple_credits: list[dict[str, Any]] | None = None,
+) -> str:
+    """单曲模式的 Recording Edit note 草稿。
+
+    专辑模式那边已经是 MB 社区通行的「Action + Sources」写法（见 build_report
+    的 edit_notes["release"]），单曲模式原来还是中文说明句 + 中文键名，两边风格
+    不一致，复制到 MB 编辑框时显得突兀。这里统一成同一套结构。
+
+    **字段一个都不能少**：原来那份草稿里的时长 / ISRC / ISWC / 发行日期，以及
+    「现有 recording：<url>」这条消歧指针，都是 MB 志愿者判断「该复用还是该新建」
+    的依据 —— 只换成漂亮模板而删掉它们，note 反而不如原来有用。所以这里是
+    **重排 + 补充**，不是替换。
+
+    溯源说明同样重要：ISRC 到底是平台自己给的，还是第三方目录（Sonovault /
+    Soundcharts）交叉引用来的，可信度不同，必须写清楚。
+    """
+    title = first(song.get("title")) or "(untitled)"
+    artist = first(song.get("artist")) or "(unknown artist)"
+    lines: list[str] = [
+        f"Recording/work metadata preparation for {title} by {artist}.",
+        "",
+        "Sources:",
+    ]
+    for url in source_urls:
+        if url:
+            lines.append(f"- {url}")
+    if not source_urls:
+        lines.append("- (no source URL provided)")
+
+    # 已核对的字段：逐条写清楚，空值直接说「未确认」，不让人猜
+    verified: list[str] = []
+    if song.get("length"):
+        verified.append(f"Length: {song['length']}")
+    if song.get("isrc"):
+        verified.append(f"ISRC: {song['isrc']}" + (f" (verified via {isrc_provenance})" if isrc_provenance else ""))
+    if song.get("iswc"):
+        verified.append(f"ISWC: {song['iswc']}")
+    if song.get("release_date"):
+        verified.append(f"Release date: {song['release_date']}")
+    if song.get("album"):
+        verified.append(f"Album: {song['album']}")
+    if verified:
+        lines += ["", "Verified metadata:"] + [f"- {item}" for item in verified]
+
+    # 词曲 Credits 的出处：Apple 页面是版权方侧数据，值得单独说一句
+    credits_urls = [first(credit.get("source_url")) for credit in (apple_credits or []) if credit.get("source_url")]
+    if credits_urls:
+        lines += ["", "Composer/Lyricist credits sourced from Apple Music credits page:"] + [f"- {url}" for url in credits_urls]
+
+    # 消歧指针：MB 里已经有这条 recording 时，明确给出，避免重复建
+    if recording.get("mbid"):
+        lines += [
+            "",
+            f"Existing recording already in MusicBrainz: {recording.get('url') or ''}",
+            "Please confirm this is the same version (check artist / length / ISRC against the release) "
+            "and reuse it rather than creating a duplicate. Note that studio, live, cover and re-recordings "
+            "are separate recordings.",
+        ]
+    else:
+        lines += [
+            "",
+            "No existing recording was found in MusicBrainz for this track. "
+            "This is a new recording entry to be added under the release it belongs to.",
+        ]
+
+    lines += [
+        "",
+        "ISWC and collecting-society identifiers are left blank unless they can be verified from an "
+        "authoritative source. ISRC is taken from the release side.",
+    ]
+    return "\n".join(lines)
+
+
 def build_song_report(primary_url: str, source_urls: list[str], song_source: str = "apple", song_id: str = "", album_name: str = "", artist_name: str = "") -> dict[str, Any]:
     """单曲链接的独立报告：聚焦「这一首歌」的资料（recording / work / credits / 歌词候选）。
 
@@ -3086,6 +3485,9 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
     #    Sonovault 未命中（曲库未收录 / CJK 标题不索引）且单曲来源是 apple/spotify/deezer
     #    时，再用 Soundcharts 按平台曲目 ID 直查（不依赖模糊搜索，更精确）。
     #    两边都搜不到就静默，不制造噪音；平台已给的 ISRC 绝不覆盖。
+    #    isrc_provenance 记录 ISRC 的出处，Edit note 要写「这个 ISRC 是谁给的」，
+    #    MB 志愿者才能判断可不可信（平台自己给的 vs 第三方目录交叉引用的可信度不同）。
+    isrc_provenance = ""
     if not song.get("isrc"):
         try:
             sv = sonovault_track_search(song.get("title") or "", song.get("artist") or "")
@@ -3095,6 +3497,7 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
         if sv:
             if not song.get("isrc") and sv.get("isrc"):
                 song["isrc"] = sv["isrc"]
+                isrc_provenance = "Sonovault"
             if sv.get("iswc"):
                 song["iswc"] = sv["iswc"]
             api_notes.append(f"ISRC 来自 Sonovault 交叉引用（{sv.get('title') or '同名单曲'} · {sv.get('source_url') or 'sonovault.now'}）")
@@ -3107,9 +3510,12 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
             if sc:
                 if not song.get("isrc") and sc.get("isrc"):
                     song["isrc"] = sc["isrc"]
+                    isrc_provenance = "Soundcharts"
                 if sc.get("iswc"):
                     song["iswc"] = sc["iswc"]
                 api_notes.append(f"ISRC 来自 Soundcharts 交叉引用（{sc.get('title') or '同名单曲'} · {sc.get('source_url') or 'soundcharts.com'}）")
+    elif song.get("isrc"):
+        isrc_provenance = platform_label
 
     # ---- 2. MusicBrainz recording 搜索（歌名 + 艺人）----
     recording: dict[str, Any] = {}
@@ -3247,15 +3653,11 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
     checklist.append({"label": "ISRC / ISWC 原则", "reason": "ISRC 以发行侧数据为准；ISWC 查不到就留空，不要从别的歌曲复制。"})
 
     edit_notes: dict[str, str] = {}
-    dl = "、".join(item for item in [song.get("length"), f"ISRC {song['isrc']}" if song.get("isrc") else "", f"ISWC {song['iswc']}" if song.get("iswc") else "", f"发行于 {song.get('release_date')}" if song.get("release_date") else ""] if item)
-    disambig_notes = []
-    if recording.get("mbid"):
-        disambig_notes.append(f"现有 recording：{recording['url']}")
-    edit_notes["Recording / Work 提交备忘"] = "\n".join(
-        [f"歌曲：{song.get('title')} —— {song.get('artist')}", f"时长：{song.get('length') or '未确认'} · {dl or '无其他基础字段'}"] + disambig_notes
+    edit_notes["recording"] = song_recording_edit_note(
+        song, recording, source_urls, isrc_provenance, apple_credits
     )
     if work_relations.get("markdown"):
-        edit_notes["Work 关系与 Credits"] = work_relations["markdown"]
+        edit_notes["work"] = work_relations["markdown"]
 
     return {
         "report_type": "song",
@@ -3333,8 +3735,56 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     song_url_info = detect_song_url(primary_url) if source_urls else {}
     if song_url_info:
         return build_song_report(primary_url, source_urls, song_url_info["source"], song_url_info["track_id"], album_name, artist_name)
-    page_summaries = [source_page_summary(url) for url in source_urls]
-    page_summaries = [summary for summary in page_summaries if summary]
+    # ---- 并行阶段 1：互相独立的上游来源 ----
+    # 这些来源彼此不依赖（谁也不知道谁的结果），串行等着就是白等慢的那个。
+    # Apple 故意不在这一批里：itunes_album_by_id 的整单区域切换要用 artist_hint，
+    # 而 artist_hint 来自下面 page / Spotify / Deezer 的结果 —— 必须放到第二阶段。
+    # MusicBrainz 也不在这一批：它有 1 req/s 的硬限制，走自己的限速通道（mb_request）。
+    page_summaries: list[dict[str, Any]] = []
+    spotify_data: dict[str, Any] = {}
+    deezer_data: dict[str, Any] = {}
+    deezer_reverse = ""
+
+    stage1_tasks: list[Any] = []
+    stage1_kinds: list[str] = []
+    for url in source_urls:
+        stage1_tasks.append(lambda u=url: source_page_summary(u))
+        stage1_kinds.append("page")
+    spotify_id = next((found for url in source_urls if (found := extract_spotify_id(url))), "")
+    if spotify_id:
+        stage1_tasks.append(lambda sid=spotify_id: spotify_album(sid))
+        stage1_kinds.append("spotify")
+    deezer_id = next((found for url in source_urls if (found := extract_deezer_id(url))), "")
+    if deezer_id:
+        stage1_tasks.append(lambda did=deezer_id: deezer_album(did))
+        stage1_kinds.append("deezer")
+
+    stage1_results = run_parallel(stage1_tasks)
+    # 把 worker 线程里的缓存命中计数汇总回请求线程，否则「本次有 N 个命中缓存」恒为空
+    merge_cache_stats([(item.hit_delta, item.miss_delta) for item in stage1_results])
+
+    for index, outcome in enumerate(stage1_results):
+        kind = stage1_kinds[index]
+        if kind == "page":
+            if outcome.error is not None:
+                # source_page_summary 内部已经兜住 FetchError 并返回 unavailable，
+                # 走到这里说明是意外异常：记一条警告，别让整次查询失败
+                source_warnings.append({"source": "页面解析", "warning": f"读取页面失败：{outcome.error}"})
+                continue
+            summary = outcome.value
+            if summary:
+                page_summaries.append(summary)
+        elif kind == "spotify":
+            if outcome.error is not None:
+                source_warnings.append({"source": "Spotify", "warning": f"Spotify 数据读取失败：{outcome.error}"})
+            else:
+                spotify_data = outcome.value or {}
+        elif kind == "deezer":
+            if outcome.error is not None:
+                source_warnings.append({"source": "Deezer", "warning": f"Deezer 数据读取失败：{outcome.error}"})
+            else:
+                deezer_data = outcome.value or {}
+
     page_hint = next((item for item in page_summaries if item.get("status") == "ok" and (item.get("title") or item.get("artist"))), {})
     release_id, release_group_id = extract_mbids(primary_url)
     apple_id = extract_apple_id(primary_url)
@@ -3356,21 +3806,6 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             # 贴到本张上就是错数据，宁可留空。
             source_warnings.append({"source": "Apple/iTunes", "warning": f"链接里的 ?i={apple_track_id} 属于专辑 {linked_album}，与链接的专辑 {apple_id} 不一致，已跳过 Apple Credits 采集"})
             apple_track_id = ""
-    spotify_id = next((found for url in source_urls if (found := extract_spotify_id(url))), "")
-    spotify_data: dict[str, Any] = {}
-    if spotify_id:
-        try:
-            spotify_data = spotify_album(spotify_id)
-        except FetchError as exc:
-            source_warnings.append({"source": "Spotify", "warning": f"Spotify 数据读取失败：{exc}"})
-    deezer_id = next((found for url in source_urls if (found := extract_deezer_id(url))), "")
-    deezer_data: dict[str, Any] = {}
-    deezer_reverse = ""
-    if deezer_id:
-        try:
-            deezer_data = deezer_album(deezer_id)
-        except FetchError as exc:
-            source_warnings.append({"source": "Deezer", "warning": f"Deezer 数据读取失败：{exc}"})
     if deezer_data and not page_hint and deezer_id:
         # 输入就是 Deezer 链接时数据来自 API 而非页面解析，用它顶替 page_hint，避免误报「页面解析失败」
         page_hint = deezer_data
@@ -3549,8 +3984,20 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     if spotify_data:
         sources.append({"name": "Spotify", "status": "ok", "url": spotify_data.get("url") or "", "summary": spotify_data})
 
+    # page_summaries 来自用户输入的原始链接（Apple Music / OTOTOY / mora 等），
+    # Apple Music 链接的 page summary URL 与 Apple/iTunes API 来源的 URL 通常相同或等价，
+    # 不做去重直接 append 会导致同一个链接在 sources 列表里出现两次。
+    _existing_source_urls = {normalize_mb_url(item["url"]) for item in sources if item.get("url")}
     for page_summary in page_summaries:
-        sources.append({"name": page_summary.get("source") or "输入链接页面", "status": page_summary.get("status"), "url": page_summary.get("url"), "summary": page_summary})
+        page_url = page_summary.get("url") or ""
+        if page_url and normalize_mb_url(page_url) in _existing_source_urls:
+            # 这条页面链接已经被 Apple/iTunes 或其他 API 来源录入，跳过，避免重复
+            if page_summary.get("status") != "ok":
+                source_warnings.append({"source": page_summary.get("source") or "输入链接页面", "warning": f"页面抓取失败（{page_summary.get('error', '未知原因')}），该来源未参与本次整理，可重试或改用其它链接"})
+            continue
+        sources.append({"name": page_summary.get("source") or "输入链接页面", "status": page_summary.get("status"), "url": page_url, "summary": page_summary})
+        if page_url:
+            _existing_source_urls.add(normalize_mb_url(page_url))
         if page_summary.get("status") != "ok":
             source_warnings.append({"source": page_summary.get("source") or "输入链接页面", "warning": f"页面抓取失败（{page_summary.get('error', '未知原因')}），该来源未参与本次整理，可重试或改用其它链接"})
 
@@ -3894,7 +4341,7 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             {"key": "cover", "label": "确认封面是该数字发行的原图", "reason": "禁止 AI 放大、裁剪、加水印或使用粉丝制作图。"},
         ],
         "edit_notes": {
-            "release": f"Digital release preparation for {title} by {artist}.\n\nSources:\n" + "\n".join(f"- {item.get('url')}" for item in sources if item.get("url")) + "\n\nAutomatically collected fields require manual verification before submission. Barcode was left blank when no reliable public value was found.",
+            "release": f"Digital release preparation for {title} by {artist}.\n\nSources:\n" + "\n".join(f"- {item.get('url')}" for item in sources if item.get("url")),
             "work": work_edit_note,
             "cover": f"Front cover taken from the release's own digital artwork source (unmodified):\n{artwork_url}" if artwork_url else "Front cover source still needs to be confirmed.",
         },
@@ -4036,7 +4483,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         username = first(str(body.get("username", ""))).strip()
         password = str(body.get("password", ""))
-        candidate = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        candidate = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
         if hmac.compare_digest(candidate.encode("utf-8"), AUTH_HEADER.encode("utf-8")):
             self.send_json({"ok": True, "auth": True, "auth_ttl": AUTH_TTL})
         else:
@@ -4166,5 +4613,5 @@ if __name__ == "__main__":
         print(f"启动失败：{exc}")
         print(f"端口 {PORT} 上似乎已经有实例在运行。请先结束旧进程：")
         print(f"  netstat -ano | findstr :{PORT}      # 记下最后一列的 PID")
-        print(f"  taskkill /F /PID <PID>")
-        raise SystemExit(1)
+        print("  taskkill /F /PID <PID>")
+        raise SystemExit(1) from exc
