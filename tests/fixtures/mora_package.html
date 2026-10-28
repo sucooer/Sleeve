@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!--
+  mora 专辑页的精简样本（用于离线解析测试）。
+
+  mora 页面主要靠 Schema.org JSON-LD 提供结构化数据（parse_mora_html
+  走 json_ld_summary），所以这里放一段 MusicAlbum 的 JSON-LD。
+  同时保留 og:title / og:image 作为 JSON-LD 缺字段时的兜底路径。
+-->
+<html lang="ja">
+<head>
+  <meta property="og:title" content="mora sample album">
+  <meta property="og:image" content="https://mora.jp/cdn/sample.jpg">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "MusicAlbum",
+    "name": "Sample mora Album",
+    "byArtist": { "@type": "MusicGroup", "name": "Sample Artist" },
+    "datePublished": "2021-06-30",
+    "recordLabel": { "@type": "Organization", "name": "Sample Label" },
+    "numTracks": 3,
+    "image": "https://mora.jp/cdn/sample.jpg"
+  }
+  </script>
+</head>
+<body>
+  <p>品番：MORA-12345</p>
+</body>
+</html>

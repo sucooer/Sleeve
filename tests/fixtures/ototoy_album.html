@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!--
+  OTOTOY 专辑页的精简样本（用于离线解析测试）。
+
+  保留 parse_ototoy_html 真正依赖的结构：
+    - h1.album-title / p.album-artist / p.release-day / p.label-name / p.catalog-id
+    - table.tracklist 里的行（td.num / span[id^=title-] / td.item.center 里的时长）
+    - 封面图 URL 里同时含 "jacket" 与 "4168264"（解析器靠这两个特征挑图）
+  其余部分（导航、推荐位、脚本）一律删掉 —— 样本要小，
+  但结构必须是真的，否则测的就不是解析器了。
+-->
+<html lang="ja">
+<head>
+  <meta name="description" content="Sample album for offline parser tests.">
+</head>
+<body>
+  <h1 class="album-title">夜に駆ける</h1>
+  <p class="album-artist">YOASOBI</p>
+  <p class="release-day">2020-12-16</p>
+  <p class="label-name">Label: Sony Music Labels</p>
+  <p class="catalog-id">Catalog number: AYCJA-1</p>
+  <img class="jacket" src="https://ototoy.jp/_/default/jacket/4168264.jpg">
+  <table class="tracklist">
+    <tbody>
+      <tr>
+        <td class="num">1</td>
+        <td><span id="title-1">あの、Dream.</span></td>
+        <td class="item center">04:22</td>
+      </tr>
+      <tr>
+        <td class="num">2</td>
+        <td><span id="title-2">あの、Dream. (instrumental)</span></td>
+        <td class="item center">04:22</td>
+      </tr>
+    </tbody>
+  </table>
+</body>
+</html>

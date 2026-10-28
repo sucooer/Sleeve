@@ -959,7 +959,7 @@ def _soundcharts_oauth_token() -> str:
     if not (SOUNDCHARTS_CLIENT_ID and SOUNDCHARTS_CLIENT_SECRET):
         return ""
     basic = "Basic " + base64.b64encode(
-        f"{SOUNDCHARTS_CLIENT_ID}:{SOUNDCHARTS_CLIENT_SECRET}".encode("utf-8")
+        f"{SOUNDCHARTS_CLIENT_ID}:{SOUNDCHARTS_CLIENT_SECRET}".encode()
     ).decode("ascii")
     try:
         req = Request(
@@ -1231,7 +1231,6 @@ def parse_ototoy_html(html: str, url: str) -> dict[str, Any]:
     date_match = re.search(r'<p[^>]+class=["\'][^"\']*release-day[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
     label_match = re.search(r'<p[^>]+class=["\'][^"\']*label-name[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
     catalog_match = re.search(r'<p[^>]+class=["\'][^"\']*catalog-id[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
-    runtime_match = re.search(r'<p[^>]+class=["\'][^"\']*total-duration[^"\']*["\'][^>]*>(.*?)</p>', html, re.I | re.S)
     image_matches = re.findall(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', html, re.I)
     album_artist = strip_html(artist_match.group(1)) if artist_match else ""
     tracks: list[dict[str, Any]] = []
@@ -2202,7 +2201,7 @@ def is_valid_ean(code: str) -> bool:
     body, check = digits[:-1], digits[-1]
     # EAN-13 and EAN-8 start with weight 1; UPC-A starts with weight 3.
     weights = [1, 3] * 6 if len(code) == 13 else ([3, 1] * 6 if len(code) == 12 else [3, 1, 3, 1, 3, 1, 3])
-    total = sum(digit * weight for digit, weight in zip(body, weights))
+    total = sum(digit * weight for digit, weight in zip(body, weights, strict=False))
     return (10 - total % 10) % 10 == check
 
 
@@ -4252,7 +4251,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         username = first(str(body.get("username", ""))).strip()
         password = str(body.get("password", ""))
-        candidate = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        candidate = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
         if hmac.compare_digest(candidate.encode("utf-8"), AUTH_HEADER.encode("utf-8")):
             self.send_json({"ok": True, "auth": True, "auth_ttl": AUTH_TTL})
         else:
@@ -4382,5 +4381,5 @@ if __name__ == "__main__":
         print(f"启动失败：{exc}")
         print(f"端口 {PORT} 上似乎已经有实例在运行。请先结束旧进程：")
         print(f"  netstat -ano | findstr :{PORT}      # 记下最后一列的 PID")
-        print(f"  taskkill /F /PID <PID>")
-        raise SystemExit(1)
+        print("  taskkill /F /PID <PID>")
+        raise SystemExit(1) from exc
