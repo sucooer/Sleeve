@@ -1019,7 +1019,7 @@ def test_build_song_report_full(monkeypatch):
     assert any(e["site"] == "Apple Music" for e in report["external_links"])
     assert any(e["site"] == "Deezer" for e in report["external_links"])
     assert len(report["manual_review"]) >= 4
-    assert report["edit_notes"]["Recording / Work 提交备忘"]
+    assert report["edit_notes"]["recording"]
     assert "The Fate of Ophelia" in report["markdown"]
 
 

@@ -3150,6 +3150,84 @@ def search_candidates(album_name: str, artist_name: str = "") -> dict[str, Any]:
     }
 
 
+def song_recording_edit_note(
+    song: dict[str, Any],
+    recording: dict[str, Any],
+    source_urls: list[str],
+    isrc_provenance: str = "",
+    apple_credits: list[dict[str, Any]] | None = None,
+) -> str:
+    """单曲模式的 Recording Edit note 草稿。
+
+    专辑模式那边已经是 MB 社区通行的「Action + Sources」写法（见 build_report
+    的 edit_notes["release"]），单曲模式原来还是中文说明句 + 中文键名，两边风格
+    不一致，复制到 MB 编辑框时显得突兀。这里统一成同一套结构。
+
+    **字段一个都不能少**：原来那份草稿里的时长 / ISRC / ISWC / 发行日期，以及
+    「现有 recording：<url>」这条消歧指针，都是 MB 志愿者判断「该复用还是该新建」
+    的依据 —— 只换成漂亮模板而删掉它们，note 反而不如原来有用。所以这里是
+    **重排 + 补充**，不是替换。
+
+    溯源说明同样重要：ISRC 到底是平台自己给的，还是第三方目录（Sonovault /
+    Soundcharts）交叉引用来的，可信度不同，必须写清楚。
+    """
+    title = first(song.get("title")) or "(untitled)"
+    artist = first(song.get("artist")) or "(unknown artist)"
+    lines: list[str] = [
+        f"Recording/work metadata preparation for {title} by {artist}.",
+        "",
+        "Sources:",
+    ]
+    for url in source_urls:
+        if url:
+            lines.append(f"- {url}")
+    if not source_urls:
+        lines.append("- (no source URL provided)")
+
+    # 已核对的字段：逐条写清楚，空值直接说「未确认」，不让人猜
+    verified: list[str] = []
+    if song.get("length"):
+        verified.append(f"Length: {song['length']}")
+    if song.get("isrc"):
+        verified.append(f"ISRC: {song['isrc']}" + (f" (verified via {isrc_provenance})" if isrc_provenance else ""))
+    if song.get("iswc"):
+        verified.append(f"ISWC: {song['iswc']}")
+    if song.get("release_date"):
+        verified.append(f"Release date: {song['release_date']}")
+    if song.get("album"):
+        verified.append(f"Album: {song['album']}")
+    if verified:
+        lines += ["", "Verified metadata:"] + [f"- {item}" for item in verified]
+
+    # 词曲 Credits 的出处：Apple 页面是版权方侧数据，值得单独说一句
+    credits_urls = [first(credit.get("source_url")) for credit in (apple_credits or []) if credit.get("source_url")]
+    if credits_urls:
+        lines += ["", "Composer/Lyricist credits sourced from Apple Music credits page:"] + [f"- {url}" for url in credits_urls]
+
+    # 消歧指针：MB 里已经有这条 recording 时，明确给出，避免重复建
+    if recording.get("mbid"):
+        lines += [
+            "",
+            f"Existing recording already in MusicBrainz: {recording.get('url') or ''}",
+            "Please confirm this is the same version (check artist / length / ISRC against the release) "
+            "and reuse it rather than creating a duplicate. Note that studio, live, cover and re-recordings "
+            "are separate recordings.",
+        ]
+    else:
+        lines += [
+            "",
+            "No existing recording was found in MusicBrainz for this track. "
+            "This is a new recording entry to be added under the release it belongs to.",
+        ]
+
+    lines += [
+        "",
+        "ISWC and collecting-society identifiers are left blank unless they can be verified from an "
+        "authoritative source. ISRC is taken from the release side.",
+    ]
+    return "\n".join(lines)
+
+
 def build_song_report(primary_url: str, source_urls: list[str], song_source: str = "apple", song_id: str = "", album_name: str = "", artist_name: str = "") -> dict[str, Any]:
     """单曲链接的独立报告：聚焦「这一首歌」的资料（recording / work / credits / 歌词候选）。
 
@@ -3256,6 +3334,9 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
     #    Sonovault 未命中（曲库未收录 / CJK 标题不索引）且单曲来源是 apple/spotify/deezer
     #    时，再用 Soundcharts 按平台曲目 ID 直查（不依赖模糊搜索，更精确）。
     #    两边都搜不到就静默，不制造噪音；平台已给的 ISRC 绝不覆盖。
+    #    isrc_provenance 记录 ISRC 的出处，Edit note 要写「这个 ISRC 是谁给的」，
+    #    MB 志愿者才能判断可不可信（平台自己给的 vs 第三方目录交叉引用的可信度不同）。
+    isrc_provenance = ""
     if not song.get("isrc"):
         try:
             sv = sonovault_track_search(song.get("title") or "", song.get("artist") or "")
@@ -3265,6 +3346,7 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
         if sv:
             if not song.get("isrc") and sv.get("isrc"):
                 song["isrc"] = sv["isrc"]
+                isrc_provenance = "Sonovault"
             if sv.get("iswc"):
                 song["iswc"] = sv["iswc"]
             api_notes.append(f"ISRC 来自 Sonovault 交叉引用（{sv.get('title') or '同名单曲'} · {sv.get('source_url') or 'sonovault.now'}）")
@@ -3277,9 +3359,12 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
             if sc:
                 if not song.get("isrc") and sc.get("isrc"):
                     song["isrc"] = sc["isrc"]
+                    isrc_provenance = "Soundcharts"
                 if sc.get("iswc"):
                     song["iswc"] = sc["iswc"]
                 api_notes.append(f"ISRC 来自 Soundcharts 交叉引用（{sc.get('title') or '同名单曲'} · {sc.get('source_url') or 'soundcharts.com'}）")
+    elif song.get("isrc"):
+        isrc_provenance = platform_label
 
     # ---- 2. MusicBrainz recording 搜索（歌名 + 艺人）----
     recording: dict[str, Any] = {}
@@ -3417,15 +3502,11 @@ def build_song_report(primary_url: str, source_urls: list[str], song_source: str
     checklist.append({"label": "ISRC / ISWC 原则", "reason": "ISRC 以发行侧数据为准；ISWC 查不到就留空，不要从别的歌曲复制。"})
 
     edit_notes: dict[str, str] = {}
-    dl = "、".join(item for item in [song.get("length"), f"ISRC {song['isrc']}" if song.get("isrc") else "", f"ISWC {song['iswc']}" if song.get("iswc") else "", f"发行于 {song.get('release_date')}" if song.get("release_date") else ""] if item)
-    disambig_notes = []
-    if recording.get("mbid"):
-        disambig_notes.append(f"现有 recording：{recording['url']}")
-    edit_notes["Recording / Work 提交备忘"] = "\n".join(
-        [f"歌曲：{song.get('title')} —— {song.get('artist')}", f"时长：{song.get('length') or '未确认'} · {dl or '无其他基础字段'}"] + disambig_notes
+    edit_notes["recording"] = song_recording_edit_note(
+        song, recording, source_urls, isrc_provenance, apple_credits
     )
     if work_relations.get("markdown"):
-        edit_notes["Work 关系与 Credits"] = work_relations["markdown"]
+        edit_notes["work"] = work_relations["markdown"]
 
     return {
         "report_type": "song",
