@@ -3549,8 +3549,20 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     if spotify_data:
         sources.append({"name": "Spotify", "status": "ok", "url": spotify_data.get("url") or "", "summary": spotify_data})
 
+    # page_summaries 来自用户输入的原始链接（Apple Music / OTOTOY / mora 等），
+    # Apple Music 链接的 page summary URL 与 Apple/iTunes API 来源的 URL 通常相同或等价，
+    # 不做去重直接 append 会导致同一个链接在 sources 列表里出现两次。
+    _existing_source_urls = {normalize_mb_url(item["url"]) for item in sources if item.get("url")}
     for page_summary in page_summaries:
-        sources.append({"name": page_summary.get("source") or "输入链接页面", "status": page_summary.get("status"), "url": page_summary.get("url"), "summary": page_summary})
+        page_url = page_summary.get("url") or ""
+        if page_url and normalize_mb_url(page_url) in _existing_source_urls:
+            # 这条页面链接已经被 Apple/iTunes 或其他 API 来源录入，跳过，避免重复
+            if page_summary.get("status") != "ok":
+                source_warnings.append({"source": page_summary.get("source") or "输入链接页面", "warning": f"页面抓取失败（{page_summary.get('error', '未知原因')}），该来源未参与本次整理，可重试或改用其它链接"})
+            continue
+        sources.append({"name": page_summary.get("source") or "输入链接页面", "status": page_summary.get("status"), "url": page_url, "summary": page_summary})
+        if page_url:
+            _existing_source_urls.add(normalize_mb_url(page_url))
         if page_summary.get("status") != "ok":
             source_warnings.append({"source": page_summary.get("source") or "输入链接页面", "warning": f"页面抓取失败（{page_summary.get('error', '未知原因')}），该来源未参与本次整理，可重试或改用其它链接"})
 
@@ -3894,7 +3906,7 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             {"key": "cover", "label": "确认封面是该数字发行的原图", "reason": "禁止 AI 放大、裁剪、加水印或使用粉丝制作图。"},
         ],
         "edit_notes": {
-            "release": f"Digital release preparation for {title} by {artist}.\n\nSources:\n" + "\n".join(f"- {item.get('url')}" for item in sources if item.get("url")) + "\n\nAutomatically collected fields require manual verification before submission. Barcode was left blank when no reliable public value was found.",
+            "release": f"Digital release preparation for {title} by {artist}.\n\nSources:\n" + "\n".join(f"- {item.get('url')}" for item in sources if item.get("url")),
             "work": work_edit_note,
             "cover": f"Front cover taken from the release's own digital artwork source (unmodified):\n{artwork_url}" if artwork_url else "Front cover source still needs to be confirmed.",
         },
