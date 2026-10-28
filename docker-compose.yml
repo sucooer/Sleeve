@@ -38,6 +38,10 @@ services:
       SOUNDCHARTS_CLIENT_SECRET: ${SOUNDCHARTS_CLIENT_SECRET:-}
       SOUNDCHARTS_APP_ID: ${SOUNDCHARTS_APP_ID:-}
       SOUNDCHARTS_API_KEY: ${SOUNDCHARTS_API_KEY:-}
+      # Spotify 官方 Web API 凭据（可选）：配了就走官方接口，
+      # 没配则用免凭据的 groover 反代（即开即用，但第三方接口可能下线）。
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
     ports:
       - "${SLEEVE_BIND:-127.0.0.1}:${SLEEVE_PUBLISH_PORT:-8765}:8765"
     extra_hosts:
