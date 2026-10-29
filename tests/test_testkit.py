@@ -478,3 +478,38 @@ def test_facade_reexports_every_public_name_of_sleeve_modules():
             ]
 
     assert not missing, "app.py 门面漏了这些公开名，app.X 会 AttributeError 或 mock 静默失效：\n" + "\n".join(missing)
+
+
+def test_tests_only_reference_existing_app_attributes():
+    """tests 里出现的每个 `app.X` 都必须真实存在于 app 上。
+
+    这条守的是「偶然耦合」：`app.time.time()` 能跑，仅仅因为 app 恰好 import 了
+    time —— 和被测逻辑毫无关系。拆分时 app 不再需要 time，测试就断了，
+    而失败信息（AttributeError: module 'app' has no attribute 'time'）
+    完全指向不了真正的原因。
+
+    app.time 已经改成用 tests 自己 import 的 time。这个测试确保以后不会再
+    顺手写 app.<stdlib 模块>。
+
+    用 AST 而不是正则：正则会把 `"app.py"`、注释里举例的 `app.net` 全算进来，
+    而 `ast.Attribute(value=Name('app'))` 只可能是真正的属性访问。
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "src"))
+    import app as app_module
+
+    missing: list[str] = []
+    for path in sorted((root / "tests").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "app"
+                and not hasattr(app_module, node.attr)
+            ):
+                missing.append(f"{path.name}:{node.lineno} app.{node.attr}")
+
+    assert not missing, "tests 引用了 app 上不存在的属性：\n" + "\n".join(sorted(set(missing)))

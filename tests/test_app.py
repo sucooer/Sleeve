@@ -1450,7 +1450,10 @@ def test_soundcharts_team_usage_parses_envelope(monkeypatch):
     patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
     patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "")
     patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "")
-    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {"token": "tok", "expires_at": app.time.time() + 3600})
+    # 用 tests 自己 import 的 time，不要写 app.time —— 那是"顺手拿到 app 里
+    # 恰好 import 过的 stdlib 模块"，属于偶然耦合：app 一旦不再需要 time，
+    # 测试就跟着断，而断的原因和被测逻辑毫无关系。
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {"token": "tok", "expires_at": time.time() + 3600})
     # soundcharts_team_usage 刻意不走 fetch_json（用量要实时，不能被缓存住），
     # 因此它自己调 check_outbound —— 那一层会做真实 DNS 解析。只 mock opener 不够。
     patch_seam(monkeypatch, "check_outbound", lambda *a, **k: None)
