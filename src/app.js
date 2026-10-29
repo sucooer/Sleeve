@@ -285,7 +285,7 @@ function renderReport(report) {
   if (parserArtist) parserArtist.textContent = trackParserText(report, true);
   $("#tracks").innerHTML = tracks.length ? tracks.map((track, index) => `<tr><td>${escapeHtml(trackNumberLabel(track, index, multiDisc))}</td><td><strong>${escapeHtml(track.title)}</strong></td><td>${escapeHtml(track.artist || "跟随发行艺人")}</td><td>${escapeHtml(track.length || "未确认")}</td><td>${track.isrc ? `<code class="copyable-code" data-copy="${escapeHtml(track.isrc)}" title="点击复制 ISRC">${escapeHtml(track.isrc)}</code>` : `<span class="empty">未确认</span>`}</td><td>${track.recording_mbid ? `<a href="https://musicbrainz.org/recording/${escapeHtml(track.recording_mbid)}" target="_blank" rel="noreferrer">${escapeHtml(track.recording_mbid.slice(0, 8))}…</a>` : `<span class="empty">新建 / 待确认</span>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">没有找到曲目表，请提供更具体的发行链接。</td></tr>`;
 
-  $("#checklist").innerHTML = report.manual_review.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}" /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("");
+  renderChecklist("checklist", report.manual_review || [], checklistKey(report));
   $("#edit-notes").innerHTML = Object.entries(report.edit_notes).filter(([name]) => name !== "cover").map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
   const workRels = report.work_relations || { status: "skipped", notice: "", items: [], work_count: 0, relation_count: 0 };
   const wrCount = $("#work-relations-count");
@@ -302,8 +302,8 @@ function renderReport(report) {
   const lyricsCandidates = report.lyrics_candidates || [];
   $("#lyrics-candidates").innerHTML = lyricsCandidates.length ? renderLyricsCandidates(lyricsCandidates) : "";
   $("#diagnostics").innerHTML = [...report.confidence.notes.map((note) => `<div class="diagnostic">${escapeHtml(note)}</div>`), ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`), ...report.source_errors.map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`), ...report.api_notes.map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`)].join("");
-  const reviewCount = $("#review-count");
-  if (reviewCount) reviewCount.textContent = report.manual_review.length ? `${report.manual_review.length} 项待勾` : "已核对完";
+  // 待勾计数与进度条由 renderChecklist → syncChecklistProgress 统一维护
+  // （原来这里直接写死 `${manual_review.length} 项待勾`，勾选后永远不变）
   // 完成度分母由**实际渲染的字段**推导（发行字段 + 来源对比字段），不再写死 21：
   // 后端加字段时写死的分母会静默失真，进度条永远是错的
   renderRail(report, fields.length + (report.source_comparison || []).length);
@@ -380,9 +380,7 @@ function renderSongReport(report) {
 
   // S7 核对清单
   const items = report.manual_review || [];
-  $("#song-checklist").innerHTML = items.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}" /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("") || `<div class="empty">没有核对项。</div>`;
-  const reviewCount = $("#song-review-count");
-  if (reviewCount) reviewCount.textContent = items.length ? `${items.length} 项待勾` : "已核对完";
+  renderChecklist("song-checklist", items, checklistKey(report));
 
   // S8 Edit note 草稿
   const notes = report.edit_notes || {};
@@ -482,16 +480,91 @@ function renderLyricsCandidates(items) {
   return `<div class="lyr-block"><div class="lyr-title">Lyrics URL relationship 候选（MB 白名单站点，先建好 Work/Recording 再挂）</div>${rows}<p class="muted">MB 的 lyrics relationship 只允许白名单站点（Genius / Musixmatch / LyricsTranslate 及日文歌词站等）；点击进入各站搜索页，确认歌词页后把最终 URL 挂到 Work / Recording 的 lyrics 关系上。</p></div>`;
 }
 
+// ------------------------------------------------------------------ 核对清单勾选
+//
+// 勾选状态要跨刷新保留，所以落 sessionStorage（不是 localStorage：核对进度属于
+// 「这一次建库会话」，关掉标签页就该重新确认一遍，而不是永远显示为已完成）。
+//
+// 键用**输入 URL 列表**而不是标题/MBID：用户常常在拿到 release id 之前就开始核对，
+// 那时 MBID 还是空的；URL 是用户自己贴进来的，从第一次查询起就稳定。
+// 多行输入按行排序后再拼，避免「同样两条链接换个顺序」被当成另一张专辑。
+const CHECK_STORAGE_PREFIX = "sleeve.checklist.";
+
+function checklistKey(report) {
+  const urls = splitUrls((report && report.input && report.input.urls) || [])
+    .map((url) => url.trim().toLowerCase())
+    .sort();
+  return urls.length ? urls.join("|") : "";
+}
+
+function loadCheckedIndexes(key) {
+  if (!key) return new Set();
+  try {
+    const raw = sessionStorage.getItem(CHECK_STORAGE_PREFIX + key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((n) => Number.isInteger(n)) : []);
+  } catch {
+    // 隐私模式 / 存储被禁 / 内容是脏数据 —— 一律当作「没有勾过」，不能让整页崩掉
+    return new Set();
+  }
+}
+
+function saveCheckedIndexes(key, checked) {
+  if (!key) return;
+  try {
+    sessionStorage.setItem(CHECK_STORAGE_PREFIX + key, JSON.stringify([...checked].sort((a, b) => a - b)));
+  } catch {
+    /* ignore */
+  }
+}
+
+// 当前报告的清单勾选状态。渲染清单时重建，change 时更新。
+// baseFields 也放这里：重算进度时要原样传回 renderRail，单独开一个全局变量
+// 会被「无参调用 renderRail」顺手清零（默认参数 0），进度条就会莫名跳一下。
+let checklistState = { key: "", checked: new Set(), total: 0, baseFields: 0 };
+
+function renderChecklist(containerId, items, key) {
+  const box = $(`#${containerId}`);
+  if (!box) return;
+  const checked = loadCheckedIndexes(key);
+  checklistState = { ...checklistState, key, checked, total: items.length };
+  box.innerHTML = items.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}"${checked.has(index) ? " checked" : ""} /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("")
+    || `<div class="empty">没有核对项。</div>`;
+  syncChecklistProgress();
+}
+
+// 勾选 → 更新待勾计数与左栏进度条。
+//
+// 原先进度条把 manual_review 全量算作「未完成」，勾选框只是视觉摆设：
+// 勾完所有项，进度条一格都不动。这里把「已勾掉的项」从 open 里扣掉。
+function syncChecklistProgress() {
+  const { total, checked, baseFields } = checklistState;
+  const remaining = Math.max(0, total - checked.size);
+  for (const id of ["#review-count", "#song-review-count"]) {
+    const node = $(id);
+    if (!node) continue;
+    node.textContent = remaining ? `${remaining} 项待勾` : "已核对完";
+    node.classList.toggle("is-alert", remaining > 0);
+  }
+  // 只有专辑报告左栏才有进度条。单曲报告的左栏是 SONG INDEX，没有 rail-progress，
+  // 此时 #rail-progress-value 命中的是**隐藏的**专辑左栏 —— 去改它等于用单曲的
+  // baseFields 污染专辑报告的进度，切回专辑时会看到一次莫名的跳变。
+  if (currentReport && currentReport.report_type !== "song") renderRail(currentReport, baseFields);
+}
+
 // 左导航：完成度与待确认项汇总
 function renderRail(report, baseFields = 0) {
+  checklistState.baseFields = baseFields;
   const missing = (report.missing_fields || []).length;
   const conflicts = (report.source_comparison || []).filter((row) => row.status === "conflict").length;
   const errors = (report.source_errors || []).length;
   const reviews = (report.manual_review || []).length;
+  // 已勾掉的核对项不再算「待办」—— 否则勾选框对进度条毫无影响
+  const reviewsOpen = Math.max(0, reviews - checklistState.checked.size);
   // 基数 = 实际渲染的发行字段 + 对比字段（调用方传入），每一项人工核对再算 1 项。
   // 原来写死 21（注释说 15 + 6），与 fields 的实际条数已经对不上 —— 进度条一开始就是错的
   const total = baseFields + reviews;
-  const open = missing + conflicts + errors + reviews;
+  const open = missing + conflicts + errors + reviewsOpen;
   const percent = total > 0 ? Math.round(Math.max(0, Math.min(1, (total - open) / total)) * 100) : 0;
 
   const value = $("#rail-progress-value");
@@ -502,7 +575,7 @@ function renderRail(report, baseFields = 0) {
   const risks = [
     conflicts ? `${conflicts} 个字段来源冲突` : "",
     missing ? `${missing} 项发行字段待补` : "",
-    reviews ? `${reviews} 项需人工核对` : "",
+    reviewsOpen ? `${reviewsOpen} 项需人工核对` : "",
     errors ? `${errors} 个来源查询失败` : ""
   ].filter(Boolean);
 
@@ -1062,6 +1135,20 @@ document.addEventListener("click", async (event) => {
   const button = event.target.closest(".copy-note");
   if (!button) return;
   await copyText(button.dataset.note || "", button, "复制");
+});
+
+// 核对清单勾选：更新待勾计数 + 左栏进度条，并落 sessionStorage。
+// 用事件委托而不是给每个 checkbox 挂监听 —— 清单是整块 innerHTML 重绘的，
+// 直接挂监听会在每次重新渲染后全部失效（这是这块原先「勾了没反应」的根因之一）。
+document.addEventListener("change", (event) => {
+  const box = event.target.closest('input[type="checkbox"][data-check]');
+  if (!box) return;
+  const index = Number(box.dataset.check);
+  if (!Number.isInteger(index)) return;
+  if (box.checked) checklistState.checked.add(index);
+  else checklistState.checked.delete(index);
+  saveCheckedIndexes(checklistState.key, checklistState.checked);
+  syncChecklistProgress();
 });
 
 // 顶部栏显示当前访问地址
