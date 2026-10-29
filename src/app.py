@@ -29,14 +29,19 @@ SRC_DIR = Path(__file__).resolve().parent
 ROOT = SRC_DIR.parent / "public"
 HOST = os.environ.get("SLEEVE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SLEEVE_PORT", "8765"))
-def resolve_version(raw: str | None = None) -> str:
-    """应用版本号。镜像里由 CI 传 --build-arg VERSION → ENV SLEEVE_VERSION 注入；
-    本地直接跑没有这个环境变量时降级为 dev —— 代码里永远不硬编码第二份版本号。"""
-    value = (raw if raw is not None else os.environ.get("SLEEVE_VERSION", "")).strip()
-    return value or "dev"
 
-VERSION = resolve_version()
-USER_AGENT = f"Sleeve/{VERSION} (local metadata preparation tool)"
+# ------------------------------------------------------------------ 模块拆分
+#
+# 单文件已经到 4000+ 行，继续往一个文件里加代码的边际成本已经明显为负：
+# 改一张 URL 规则表要跨一千多行来回跳，审阅一个功能要在一整屏无关代码里找。
+# 按关注点往外抽模块，app.py 保留**门面**（下面这些 re-export）——
+# `app.X` 依旧可用，测试与调用方一行都不用改。
+#
+# 放在这里而不是文件开头，是刻意让每个 import 落在「它替代的那段代码原址」，
+# 这样读 app.py 的人一眼能看出「这东西现在住在别处」，而不是在顶部堆成一片
+# 看不出所以然的 import 墙。
+from version import resolve_version, VERSION, USER_AGENT  # noqa: E402,F401
+
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_LAST_REQUEST = 0.0
 # 限速时间戳必须与「打请求」这个动作原子地绑在一起，否则并发下形同虚设（见 mb_request）
