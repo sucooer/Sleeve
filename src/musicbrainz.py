@@ -27,7 +27,7 @@ from urllib.parse import quote, urlparse
 # 上游模块（拆分前这些是 app.py 里的同级定义）
 from net import CACHE_STATS, FetchError, ascii_url, cache_key, cache_load, fetch_json
 from sites import site_info
-from values import TITLE_SUFFIX_RE, clean_value, first, format_duration, iso_date, title_is_related
+from values import TITLE_SUFFIX_RE, clean_value, first, format_duration, iso_date, normalize_mb_url, title_is_related
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_LAST_REQUEST = 0.0
@@ -141,12 +141,6 @@ def barcode_from_artwork(url: str) -> str:
         if is_valid_ean(candidate):
             return candidate
     return ""
-
-
-def normalize_mb_url(url: str) -> str:
-    parsed = urlparse(url or "")
-    path = parsed.path.rstrip("/")
-    return f"{parsed.scheme}://{parsed.netloc}{path}" if parsed.scheme and parsed.netloc else ""
 
 
 def mb_reverse_release_ids(url: str) -> list[str]:

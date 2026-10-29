@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from typing import Any
+from urllib.parse import urlparse
 
 
 def first(value: Any, default: str = "") -> str:
@@ -70,3 +71,16 @@ def title_is_related(candidate_title: Any, query_title: str) -> bool:
     if len(query) >= 2 and any(query[i:i + 2] in candidate for i in range(len(query) - 1)):
         return True
     return False
+
+
+def normalize_mb_url(url: str) -> str:
+    """URL 归一化：去掉末尾斜杠，只保留 scheme://netloc/path。
+
+    名字里的 "mb" 是历史遗留 —— 它最早只服务于 MusicBrainz 链接去重，
+    但现在是通用的：iTunes 的候选去重、报告里的来源比对都用它。
+    比对 URL 必须先归一化，否则同一个页面因为一个末尾斜杠或多一段 query
+    就会被当成两个来源，报告里冒出重复条目。
+    """
+    parsed = urlparse(url or "")
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{parsed.netloc}{path}" if parsed.scheme and parsed.netloc else ""
