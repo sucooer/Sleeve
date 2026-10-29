@@ -825,6 +825,24 @@ function showToast(message, duration = 1800) {
   }, duration);
 }
 
+// 复制成功的原地高亮：加 .is-copied，1.3 秒后去掉。
+//
+// **必须自己管计时器**：连点两次 ISRC 时，两个 setTimeout 都会到点执行，
+// 第一个就把高亮摘掉了 —— 表现为「点下去没反应」或「高亮闪一下就没」。
+// 真实场景（按住回车连点、或脚本批量触发）很容易触发，所以这里用
+// dataset 记住当前的计时器 id，新的一次先清掉旧的。
+function flashCopied(element) {
+  if (!element) return;
+  element.classList.add("is-copied");
+  const timerKey = "copyFlashTimer";
+  const previous = element.dataset[timerKey];
+  if (previous) clearTimeout(Number(previous));
+  element.dataset[timerKey] = String(setTimeout(() => {
+    element.classList.remove("is-copied");
+    delete element.dataset[timerKey];
+  }, 1300));
+}
+
 // 复制到剪贴板，三级降级：Clipboard API → execCommand 旧通道 → 选中文本兜底。
 // 注：http + 非 localhost 的环境里 navigator.clipboard 是 undefined（非 secure context），
 // 早期实现会把整段内容塞进 notice，长文本（如 Markdown）会铺满页面；现在一律先走旧通道。
@@ -873,14 +891,22 @@ async function copyText(text, button, original) {
   }
   if (!ok) ok = legacyCopy(text);
   if (ok) {
+    // 原地**不改按钮文字**。
+    //
+    // 曾经的做法是把按钮文字换成「已复制」再换回来，但它只有 3 个汉字，
+    // 而原文字普遍是 5~6 个（「复制 Markdown」「下载核对清单」）。文字宽度一变，
+    // 按钮宽度就变，后面所有按钮跟着左移 —— 工具栏一排六个按钮同时被顶一次，
+    // 肉眼看到的是「整排按钮抖了一下」。
+    //
+    // 反馈改由全局 Toast 承担（见 showToast），按钮本身只做一次高亮：
+    // 加 .is-copied 让它短暂变色，尺寸不变，因此不产生任何位移。
     if (button) {
-      button.textContent = "已复制";
-      setTimeout(() => button.textContent = original, 1300);
+      flashCopied(button);
     }
     showToast(original ? `已复制：${original}` : "已复制到剪贴板");
     return;
   }
-  if (button) button.textContent = original;
+  if (button) button.classList.remove("is-copied");
 }
 
 $("#copy-tracklist").addEventListener("click", async (event) => {
@@ -978,6 +1004,9 @@ document.addEventListener("click", async (event) => {
     const key = field.dataset.copyKey;
     if (val && val !== "未确认") {
       await copyText(val);
+      // 字段本身也给一次短暂高亮：光靠 Toast，用户低头盯着 MB 表单时
+      // 可能没注意到右下角飘过什么。字段短暂变色 = 「刚才那一下点对了」。
+      flashCopied(field);
       showToast(`已复制 ${key}: ${val}`);
     }
     return;
@@ -989,6 +1018,7 @@ document.addEventListener("click", async (event) => {
     const code = isrc.dataset.copy;
     if (code) {
       await copyText(code);
+      flashCopied(isrc);
       showToast(`已复制 ISRC: ${code}`);
     }
     return;

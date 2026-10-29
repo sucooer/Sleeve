@@ -446,6 +446,18 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
 }
 .secondary:hover, .btn:hover { background: rgba(255, 255, 255, .11); }
 
+/* 复制成功后的原地反馈：只换颜色，不动文字、不动尺寸。
+   文字一换，按钮宽度就变，后面所有按钮会被顶着左移 —— 工具栏一排按钮同时
+   抖一下比没有反馈更糟。所以这里只做「颜色 + 描边」的短暂高亮，
+   完整提示交给全局 Toast。 */
+.btn.is-copied,
+.copy-note.is-copied,
+.lookup-link.is-copied {
+  background: rgba(87, 242, 135, .16);
+  border-color: rgba(87, 242, 135, .45);
+  color: var(--green);
+}
+
 /* 次要动作的小号变体：和提示文字挤在同一行时，36px 的按钮块头显得太重。
    align-self: center 是必须的 —— .lookup-actions 是 flex 且默认 stretch，
    不写的话小按钮会被拉回整行高度，改了等于没改。 */
@@ -758,6 +770,14 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   transform: translateY(-1px);
 }
 .field.copyable:active { transform: translateY(0); }
+/* 复制成功的原地高亮：只换配色，**不动尺寸**。
+   字段是 grid 布局，宽度跟着内容走 —— 一旦改文字或加 padding，
+   整行字段都会重排，长列表里看着就是「页面抖了一下」。 */
+.field.is-copied {
+  background: rgba(87, 242, 135, .12);
+  border-color: rgba(87, 242, 135, .38);
+}
+.field.is-copied .value { color: var(--green); }
 .field .key {
   display: flex;
   justify-content: space-between;
@@ -1013,6 +1033,13 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
 .copyable-code:hover {
   background: rgba(87, 242, 135, .15);
   border-color: rgba(87, 242, 135, .4);
+  color: var(--green);
+}
+/* 复制成功后的常驻高亮（1.3 秒）：ISRC 徽标本身就有边框，
+   所以改成配色即可，不需要额外的尺寸变化。 */
+.copyable-code.is-copied {
+  background: rgba(87, 242, 135, .28);
+  border-color: rgba(87, 242, 135, .6);
   color: var(--green);
 }
 
