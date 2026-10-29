@@ -36,10 +36,11 @@ jobs:
 
       # ---- 单元测试 ----
       # 测试全部不出网（只解析字面量 IP、只连 127.0.0.1），可以放心跑。
-      # 覆盖率作为「参考值」上报而不是闸门：当前基线约 57%，
-      # 真正要卡的是「不许下降」，用 fail_under 钉住下限。
+      # 覆盖率作为「参考值」上报而不是闸门：当前基线约 64%，
+      # 真正要卡的是「不许下降」。（--cov 不带参数，用 pyproject 里
+      # source = ["src"]，否则拆分成多模块后只会量到 app.py 自己。）
       - name: 单元测试
-        run: pytest tests -q --cov=app --cov-report=term-missing --cov-report=xml
+        run: pytest tests -q --cov --cov-report=term-missing --cov-report=xml
 
       - name: 上传覆盖率报告
         uses: actions/upload-artifact@v4

@@ -17,6 +17,13 @@ dev = [
 testpaths = ["tests"]
 addopts = "-q"
 
+[tool.coverage.run]
+# 拆分后代码在 src/ 下的多个模块里，只跟 app.py 会得到 22% 这种毫无意义的数字
+# （app.py 剩下的几乎全是 re-export）。source 指向整个 src/，
+# 这样「覆盖率有没有下降」才仍然是个真问题。
+source = ["src"]
+omit = ["src/app.js"]
+
 [tool.ruff]
 line-length = 160
 target-version = "py311"
