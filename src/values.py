@@ -11,6 +11,8 @@ MB_PLACEHOLDERS 是这一层存在的核心理由：MusicBrainz 用 "[no label]"
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Any
 
 
@@ -47,3 +49,24 @@ def iso_date(value: Any) -> str:
     return text[:10] if text else ""
 
 
+TITLE_SUFFIX_RE = re.compile(r"\s*[-–—]\s*(?:single|ep|album|mini[- ]album|maxi[- ]single|deluxe(?:\s+edition)?)\s*$", re.I)
+
+
+def title_match_key(value: Any) -> str:
+    """统一日文全/半角、大小写和常见标点，去掉 Apple 的 Single/EP 后缀。"""
+    text = unicodedata.normalize("NFKC", first(value))
+    text = TITLE_SUFFIX_RE.sub("", text).casefold()
+    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE)
+
+
+def title_is_related(candidate_title: Any, query_title: str) -> bool:
+    candidate = title_match_key(candidate_title)
+    query = title_match_key(query_title)
+    if not candidate or not query:
+        return False
+    if candidate == query or candidate in query or query in candidate:
+        return True
+    # 日文长标题经常夹带修饰语；允许共享连续两字以上的词片段，但不把完全无关结果放进来
+    if len(query) >= 2 and any(query[i:i + 2] in candidate for i in range(len(query) - 1)):
+        return True
+    return False
