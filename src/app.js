@@ -186,6 +186,14 @@ function renderReport(report) {
   $("#report-title").textContent = report.release.title || "建库资料";
   $("#report-subtitle").textContent = `${report.release.artist || "未知艺人"} · ${report.release.date || "日期待确认"} · ${report.confidence.overall} confidence`;
 
+  const mbAddBtn = $("#open-mb-add");
+  if (mbAddBtn) {
+    const p = new URLSearchParams();
+    if (report.release.title) p.set("name", report.release.title);
+    if (report.release.artist) p.set("artist_credit.names.0.name", report.release.artist);
+    mbAddBtn.href = `https://musicbrainz.org/release/add?${p.toString()}`;
+  }
+
   const fields = [
     ["Title", report.release.title], ["Artist", report.release.artist], ["Release group", report.release.release_group],
     ["Primary type", report.release.primary_type], ["Secondary types", (report.release.secondary_types || []).join(", ")],
@@ -200,7 +208,14 @@ function renderReport(report) {
   const warnFields = new Set();
   if (!report.release.barcode) warnFields.add("Barcode");
   if (!report.release.catalog_number) warnFields.add("Catalog number");
-  $("#release-fields").innerHTML = fields.map(([key, value]) => `<div class="field ${warnFields.has(key) ? "warn" : ""}"><div class="key">${escapeHtml(key)}</div><div class="value">${escapeHtml(display(value))}</div></div>`).join("");
+  $("#release-fields").innerHTML = fields.map(([key, value]) => {
+    const disp = display(value);
+    const copyable = disp !== "未确认";
+    return `<div class="field ${warnFields.has(key) ? "warn" : ""} ${copyable ? "copyable" : ""}" ${copyable ? `data-copy-key="${escapeHtml(key)}" data-copy-val="${escapeHtml(value)}" title="点击复制 ${escapeHtml(key)}"` : ""}>
+      <div class="key"><span>${escapeHtml(key)}</span>${copyable ? `<span class="field-copy-hint">复制</span>` : ""}</div>
+      <div class="value">${escapeHtml(disp)}</div>
+    </div>`;
+  }).join("");
 
   const cover = report.release.cover_art_url;
   $("#cover-panel").innerHTML = `${cover ? `<img src="${escapeHtml(safeHref(cover))}" alt="${escapeHtml(report.release.title)} cover" />` : `<div class="cover-placeholder">未找到可靠封面<br/>请从发行平台取原图</div>`}<div class="cover-meta"><strong>推荐封面来源</strong><p>${cover ? `<a href="${escapeHtml(safeHref(cover))}" target="_blank" rel="noreferrer">打开原图</a>` : "待人工补充"}</p><p class="muted">保持原图，不裁剪、不 AI 放大、不加水印。</p></div>`;
@@ -266,7 +281,9 @@ function renderReport(report) {
   const isrcCount = tracks.filter((track) => track.isrc).length;
   $("#track-count").textContent = tracks.length ? `${tracks.length} tracks · ISRC ${isrcCount}/${tracks.length}` : "0 tracks";
   $("#tracklist-parser").textContent = trackParserText(report);
-  $("#tracks").innerHTML = tracks.length ? tracks.map((track, index) => `<tr><td>${escapeHtml(trackNumberLabel(track, index, multiDisc))}</td><td><strong>${escapeHtml(track.title)}</strong></td><td>${escapeHtml(track.artist || "跟随发行艺人")}</td><td>${escapeHtml(track.length || "未确认")}</td><td>${track.isrc ? `<code>${escapeHtml(track.isrc)}</code>` : `<span class="empty">未确认</span>`}</td><td>${track.recording_mbid ? `<a href="https://musicbrainz.org/recording/${escapeHtml(track.recording_mbid)}" target="_blank" rel="noreferrer">${escapeHtml(track.recording_mbid.slice(0, 8))}…</a>` : `<span class="empty">新建 / 待确认</span>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">没有找到曲目表，请提供更具体的发行链接。</td></tr>`;
+  const parserArtist = $("#tracklist-parser-artist");
+  if (parserArtist) parserArtist.textContent = trackParserText(report, true);
+  $("#tracks").innerHTML = tracks.length ? tracks.map((track, index) => `<tr><td>${escapeHtml(trackNumberLabel(track, index, multiDisc))}</td><td><strong>${escapeHtml(track.title)}</strong></td><td>${escapeHtml(track.artist || "跟随发行艺人")}</td><td>${escapeHtml(track.length || "未确认")}</td><td>${track.isrc ? `<code class="copyable-code" data-copy="${escapeHtml(track.isrc)}" title="点击复制 ISRC">${escapeHtml(track.isrc)}</code>` : `<span class="empty">未确认</span>`}</td><td>${track.recording_mbid ? `<a href="https://musicbrainz.org/recording/${escapeHtml(track.recording_mbid)}" target="_blank" rel="noreferrer">${escapeHtml(track.recording_mbid.slice(0, 8))}…</a>` : `<span class="empty">新建 / 待确认</span>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">没有找到曲目表，请提供更具体的发行链接。</td></tr>`;
 
   $("#checklist").innerHTML = report.manual_review.map((item, index) => `<label class="check"><input type="checkbox" data-check="${index}" /><span><span class="check-title">${escapeHtml(item.label)}</span><br/><span class="check-reason">${escapeHtml(item.reason)}</span></span></label>`).join("");
   $("#edit-notes").innerHTML = Object.entries(report.edit_notes).filter(([name]) => name !== "cover").map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
@@ -317,7 +334,14 @@ function renderSongReport(report) {
     ["发行日期", s.release_date || "未确认"],
     ["类型", s.genre || "未确认"],
   ];
-  $("#song-fields").innerHTML = fields.map(([key, value]) => `<div class="field"><div class="key">${escapeHtml(key)}</div><div class="value">${escapeHtml(value)}</div></div>`).join("");
+  $("#song-fields").innerHTML = fields.map(([key, value]) => {
+    const disp = display(value);
+    const copyable = disp !== "未确认";
+    return `<div class="field ${copyable ? "copyable" : ""}" ${copyable ? `data-copy-key="${escapeHtml(key)}" data-copy-val="${escapeHtml(value)}" title="点击复制 ${escapeHtml(key)}"` : ""}>
+      <div class="key"><span>${escapeHtml(key)}</span>${copyable ? `<span class="field-copy-hint">复制</span>` : ""}</div>
+      <div class="value">${escapeHtml(disp)}</div>
+    </div>`;
+  }).join("");
 
   // S2 所属专辑：给线索 + 一键切专辑报告
   const albumUrl = s.album_url || "";
@@ -700,6 +724,58 @@ $("#lookup-form").addEventListener("submit", (event) => {
 });
 if (lookupButton) lookupButton.addEventListener("click", () => runLookup());
 
+// 键盘快捷键：Ctrl+Enter / Cmd+Enter 快捷提交
+const sourceUrlsInput = $("#source-urls");
+if (sourceUrlsInput) {
+  sourceUrlsInput.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      runLookup();
+    }
+  });
+}
+
+// 输入框快捷辅助胶囊：粘贴剪贴板 / 填入示例 / 清空
+$("#btn-paste-clipboard")?.addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && text.trim()) {
+      const input = $("#source-urls");
+      if (input) {
+        input.value = input.value ? `${input.value.trim()}\n${text.trim()}` : text.trim();
+        showToast("已粘贴剪贴板链接");
+      }
+    } else {
+      showToast("剪贴板中没有文本内容");
+    }
+  } catch (error) {
+    showToast("浏览器未授予剪贴板权限，请用 Ctrl+V 粘贴");
+  }
+});
+
+const SAMPLE_URLS = "https://music.apple.com/jp/album/yakusoku-single/6820802797";
+$("#btn-sample-urls")?.addEventListener("click", () => {
+  const input = $("#source-urls");
+  if (input) {
+    input.value = SAMPLE_URLS;
+    showToast("已填入示例链接");
+  }
+});
+
+$("#btn-clear-urls")?.addEventListener("click", () => {
+  const input = $("#source-urls");
+  if (input) {
+    input.value = "";
+    input.focus();
+    const status = $("#status");
+    if (status) {
+      status.className = "status";
+      status.textContent = "等待输入";
+    }
+    showToast("已清空输入框");
+  }
+});
+
 document.addEventListener("click", (event) => {
   const clearCatalog = event.target.closest(".clear-catalog");
   if (clearCatalog) {
@@ -730,6 +806,23 @@ function showNotice(text) {
   box.classList.add("show");
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => box.classList.remove("show"), 8000);
+}
+
+let toastTimer = 0;
+function showToast(message, duration = 1800) {
+  const toast = $("#toast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.remove("hidden");
+  void toast.offsetWidth;
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => {
+      if (!toast.classList.contains("show")) toast.classList.add("hidden");
+    }, 220);
+  }, duration);
 }
 
 // 复制到剪贴板，三级降级：Clipboard API → execCommand 旧通道 → 选中文本兜底。
@@ -780,9 +873,11 @@ async function copyText(text, button, original) {
   }
   if (!ok) ok = legacyCopy(text);
   if (ok) {
-    if (!button) return;
-    button.textContent = "已复制";
-    setTimeout(() => button.textContent = original, 1300);
+    if (button) {
+      button.textContent = "已复制";
+      setTimeout(() => button.textContent = original, 1300);
+    }
+    showToast(original ? `已复制：${original}` : "已复制到剪贴板");
     return;
   }
   if (button) button.textContent = original;
@@ -859,6 +954,46 @@ $("#copy-annotation").addEventListener("click", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  // 曲目表 Tab 切换
+  const tabBtn = event.target.closest(".tracklist-tabs .tab-btn");
+  if (tabBtn) {
+    const tab = tabBtn.dataset.tab;
+    const tabs = tabBtn.parentElement.querySelectorAll(".tab-btn");
+    tabs.forEach((b) => b.classList.toggle("active", b === tabBtn));
+    const panes = {
+      table: $("#tab-pane-table"),
+      parser: $("#tab-pane-parser"),
+      artist: $("#tab-pane-artist")
+    };
+    Object.entries(panes).forEach(([key, pane]) => {
+      if (pane) pane.classList.toggle("hidden", key !== tab);
+    });
+    return;
+  }
+
+  // 字段一键复制
+  const field = event.target.closest(".field.copyable");
+  if (field) {
+    const val = field.dataset.copyVal;
+    const key = field.dataset.copyKey;
+    if (val && val !== "未确认") {
+      await copyText(val);
+      showToast(`已复制 ${key}: ${val}`);
+    }
+    return;
+  }
+
+  // ISRC 一键复制
+  const isrc = event.target.closest(".copyable-code");
+  if (isrc) {
+    const code = isrc.dataset.copy;
+    if (code) {
+      await copyText(code);
+      showToast(`已复制 ISRC: ${code}`);
+    }
+    return;
+  }
+
   const toAlbum = event.target.closest(".song-to-album");
   if (toAlbum) {
     const url = (toAlbum.dataset.url || "").trim();

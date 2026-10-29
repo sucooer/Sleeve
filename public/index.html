@@ -20,7 +20,7 @@
        靠上面那支 apple-touch-icon 加下面这行标题 -->
   <link rel="manifest" href="/site.webmanifest" />
   <meta name="apple-mobile-web-app-title" content="Sleeve" />
-  <link rel="stylesheet" href="/styles.css?v=20261004j" />
+  <link rel="stylesheet" href="/styles.css?v=__VERSION__" />
 </head>
 <body>
   <!-- 背景光斑：毛玻璃需要有东西可以采样 -->
@@ -121,9 +121,16 @@
         <form id="lookup-form">
           <div class="query-body">
             <div class="query-col">
-              <label class="field-label" for="source-urls">来源链接</label>
+              <div class="field-label-row">
+                <label class="field-label" for="source-urls">来源链接</label>
+                <div class="query-actions">
+                  <button id="btn-paste-clipboard" type="button" class="chip-btn" title="读取剪贴板并填入">粘贴剪贴板</button>
+                  <button id="btn-sample-urls" type="button" class="chip-btn" title="填入示例链接">填入示例</button>
+                  <button id="btn-clear-urls" type="button" class="chip-btn" title="清空输入框">清空</button>
+                </div>
+              </div>
               <textarea id="source-urls" name="urls" rows="6" placeholder="https://music.apple.com/...&#10;https://open.spotify.com/album/...&#10;https://ototoy.jp/...&#10;https://mora.jp/package/..."></textarea>
-              <p class="field-hint">每行一个链接；可多行，一次最多处理若干张。</p>
+              <p class="field-hint">每行一个链接；支持 35+ 平台。可按 <b>Ctrl+Enter</b>（Mac <b>⌘+Enter</b>）快捷查询。</p>
             </div>
           </div>
 
@@ -150,6 +157,7 @@
           <p id="report-subtitle" class="muted"></p>
         </div>
         <div class="report-actions">
+          <a id="open-mb-add" class="btn btn-accent" href="https://musicbrainz.org/release/add" target="_blank" rel="noreferrer" title="在 MusicBrainz 打开新建发行页面">MusicBrainz 新建 ↗</a>
           <button id="copy-share" class="btn">复制分享链接</button>
           <button id="copy-markdown" class="btn">复制 Markdown</button>
           <button id="download-markdown" class="btn">下载 Markdown</button>
@@ -331,16 +339,28 @@
                 <button id="download-tracklist" class="btn" type="button">下载 txt</button>
               </div>
             </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr><th>#</th><th>标题</th><th>Artist Credit / 艺人</th><th>时长</th><th>ISRC</th><th>Recording</th></tr>
-                </thead>
-                <tbody id="tracks"></tbody>
-              </table>
+            <div class="tracklist-tabs" role="tablist">
+              <button type="button" class="tab-btn active" data-tab="table">曲目表格</button>
+              <button type="button" class="tab-btn" data-tab="parser">Track Parser 格式</button>
+              <button type="button" class="tab-btn" data-tab="artist">Track Parser（带艺人）</button>
             </div>
-            <pre id="tracklist-parser" class="parser-preview"></pre>
-            <p class="hint">粘进 Track Parser：单艺人<b>取消勾选</b>「Lines contain track artists」；多碟按碟分别粘贴（<code>2-5</code> = 第 2 碟第 5 轨）。</p>
+            <div id="tab-pane-table" class="tracklist-pane">
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>#</th><th>标题</th><th>Artist Credit / 艺人</th><th>时长</th><th>ISRC</th><th>Recording</th></tr>
+                  </thead>
+                  <tbody id="tracks"></tbody>
+                </table>
+              </div>
+            </div>
+            <div id="tab-pane-parser" class="tracklist-pane hidden">
+              <pre id="tracklist-parser" class="parser-preview"></pre>
+            </div>
+            <div id="tab-pane-artist" class="tracklist-pane hidden">
+              <pre id="tracklist-parser-artist" class="parser-preview"></pre>
+            </div>
+            <p class="hint">粘进 Track Parser：单艺人<b>取消勾选</b>「Lines contain track artists」；多碟按碟分别粘贴（<code>2-5</code> = 第 2 碟第 5 轨）。点击表格中 ISRC 即可单独复制。</p>
           </section>
 
           <!-- ===== 阶段 D · 交付前校验 ===== -->
@@ -537,6 +557,9 @@
   <!-- 数据源用量小徽标（右下角）：Soundcharts 配额余量，配置后才显示 -->
   <div id="usage-badge" class="usage-badge hidden" aria-live="polite"></div>
 
-  <script src="/app.js?v=20261004j"></script>
+  <!-- 全局轻量 Toast -->
+  <div id="toast" class="toast hidden" aria-live="polite"></div>
+
+  <script src="/app.js?v=__VERSION__"></script>
 </body>
 </html>
