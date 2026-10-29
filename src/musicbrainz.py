@@ -487,3 +487,22 @@ def language_script(title: str, tracks: list[dict[str, Any]], region: str = "") 
     return "English", "Latin"
 
 
+def choose_mb_candidate(candidates: list[dict[str, Any]], title_hint: str, artist_hint: str) -> dict[str, Any]:
+    def score(candidate: dict[str, Any]) -> tuple[int, int, int]:
+        title = first(candidate.get("title")).casefold()
+        phrase = mb_search_artist(candidate).casefold()
+        title_match = int(bool(title_hint) and title == title_hint.casefold())
+        artist_match = int(bool(artist_hint) and artist_hint.casefold().replace(" ", "") in phrase.replace(" ", ""))
+        try:
+            relevance = int(candidate.get("score") or 0)
+        except (TypeError, ValueError):
+            relevance = 0
+        return title_match, artist_match, relevance
+    return max(candidates, key=score, default={})
+
+# 注意：choose_mb_candidate 当前**没有任何调用点**（自首次提交起就是孤儿，
+# tests 里也从未引用）。保留而不是删除，是因为它和 itunes.choose_itunes_candidate
+# 是一对：等哪天要按「标题精确 / 艺人匹配 / MB relevance」三元组挑 MB 候选时
+# 直接可用，而现在删掉只会让下一个实现者重新写一遍。
+# 放在这里而不是 app.py，是因为它依赖 mb_search_artist —— 客户端自己的打分逻辑。
+
