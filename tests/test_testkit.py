@@ -420,3 +420,61 @@ def test_seam_names_are_single_definition_sites():
 
     duplicated = {name: files for name, files in definitions.items() if len(files) > 1}
     assert not duplicated, f"seam 名字被重复定义（拆包事故）: {duplicated}"
+
+
+def test_facade_reexports_every_public_name_of_sleeve_modules():
+    """app.py 必须 re-export 每个 sleeve 模块的**全部**公开顶层名字。
+
+    这条契约是 150 处 mock 与所有 `app.X` 调用点能在拆分后继续工作的**依据**。
+    漏一个名字的失败方式是隐性的：`patch_seam(monkeypatch, "X", ...)` 只会发现
+    「X 在 app 上没有同名定义」而静默跳过，测试照过，但它其实没打上补丁；
+    或者 `app.spotify_auth_headers` 直接 AttributeError。
+
+    （这个测试就是被真实踩到之后补的：拆分 spotify 时我按「app.py 自己还在用
+    哪些名字」来决定 re-export，于是 spotify_auth_headers 没了 ——
+    test_spotify_api.py 立刻 AttributeError。门面的承诺是「与拆分前一致」，
+    不是「app.py 当前用得到的那些」。）
+
+    注意要**递归进 if / try 体**：CACHE_TTL 定义在
+    `try: CACHE_TTL = int(...) except ValueError: CACHE_TTL = 3600` 里
+    （环境变量可能填错），只扫 tree.body 会漏掉它 —— 这正是第一次写出这个
+    测试时漏掉 CACHE_TTL、然后被 test_cache_sweep_expired 抓到的地方。
+    """
+    import ast
+
+    def bound_names(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return [node.name]
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            return [node.targets[0].id]
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return [node.target.id]
+        if isinstance(node, (ast.If, ast.Try)):
+            out = []
+            for sub in [*node.body, *getattr(node, "orelse", []), *getattr(node, "handlers", []),
+                        *getattr(node, "finalbody", [])]:
+                inner = sub.body[0] if isinstance(sub, (ast.If, ast.Try)) else sub
+                out += bound_names(inner)
+            return out
+        return []
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    app_tree = ast.parse((root / "app.py").read_text(encoding="utf-8"))
+
+    reexported: set[str] = set()
+    for node in ast.walk(app_tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module != "__future__":
+            reexported.update(alias.asname or alias.name for alias in node.names)
+
+    missing: list[str] = []
+    for path in sorted(root.glob("*.py")):
+        if path.name == "app.py":
+            continue
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            missing += [
+                f"{path.name}:{node.lineno} {n}"
+                for n in bound_names(node)
+                if not n.startswith("_") and n not in reexported
+            ]
+
+    assert not missing, "app.py 门面漏了这些公开名，app.X 会 AttributeError 或 mock 静默失效：\n" + "\n".join(missing)
