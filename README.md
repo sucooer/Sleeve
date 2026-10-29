@@ -25,12 +25,32 @@ python src/app.py
 
 ```
 sleeve/
-├── src/                 # 代码：app.py（后端）+ app.js / styles.css（前端）
+├── src/                 # 后端：app.py 是 HTTP 服务器 + 门面，业务按关注点分模块
+│   ├── app.py           # 路由、Handler、静态资源；并 re-export 下面所有模块的名字
+│   ├── config.py        # 启动配置、鉴权与限流守卫（不合格直接拒绝启动）
+│   ├── version.py       # 版本号与 User-Agent（纯 tag 驱动）
+│   ├── values.py        # 值归一化、标题比对、URL 归一化（零依赖，被复用最多）
+│   ├── sites.py         # 站点 URL 规则表与域名匹配
+│   ├── net.py           # 出网：缓存、重试、SSRF 闸门、并发抓取
+│   ├── parsers.py       # 来源页面解析（离线，只吃 HTML 字符串）
+│   ├── musicbrainz.py   # MB 只读客户端 + 每秒 1 次的限速
+│   ├── itunes.py        # iTunes / Apple Music 客户端（含 storefront 链）
+│   ├── deezer.py        # Deezer 客户端（注意：错误是 200 + {"error": ...}）
+│   ├── spotify.py       # Spotify 客户端（官方 API 优先，回落免凭据反代）
+│   ├── soundcharts.py   # Soundcharts / Sonovault（可选，未配置即静默降级）
+│   ├── report.py        # 报告组装（编排层，纯函数入口）
+│   └── app.js / styles.css  # 前端
 ├── public/              # 纯静态资源，原样对外（index.html、图标、manifest）
-├── tests/               # 纯函数回归测试（pytest，无网络依赖）
+├── tests/               # pytest，全部离线；testkit.py 提供跨模块打桩与出网熔断
 ├── docker-compose.yml   # 部署编排
 ├── .env.example         # 部署配置示例
 ```
+
+> `app.py` 保留**门面**：上面每个模块的公开名字都会 re-export，
+> 所以 `app.X` 与拆分前完全一致，调用方和测试都不必改 import。
+> 有一条测试（`test_facade_reexports_every_public_name_of_sleeve_modules`）
+> 专门守着这个契约 —— 漏一个名字时 `app.X` 会 AttributeError，
+> 而更糟的情况是打桩静默失效。
 
 ## 环境变量
 

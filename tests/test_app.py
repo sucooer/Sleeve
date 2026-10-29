@@ -32,6 +32,7 @@ SRC = REPO / "src"
 sys.path.insert(0, str(SRC))
 
 import app  # noqa: E402
+from testkit import patch_seam  # noqa: E402
 
 
 # ------------------------------------------------------------------ 出网三道闸
@@ -69,7 +70,7 @@ def test_check_outbound_rejects_dangerous_schemes_and_internal_addresses():
 
 
 def test_check_outbound_enforces_platform_allowlist_for_user_urls(monkeypatch):
-    monkeypatch.setattr(app, "ALLOW_ANY_USER_HOST", False)
+    patch_seam(monkeypatch, "ALLOW_ANY_USER_HOST", False)
     for url in ("https://notspotify.com/album/1", "https://deezer.com.evil.io/album/1", "https://music.jp.attacker.dev/x"):
         with pytest.raises(app.FetchError):
             app.check_outbound(url, user_supplied=True)
@@ -123,7 +124,7 @@ def test_guarded_redirect_handler_blocks_internal_hop():
 
 def test_guarded_redirect_handler_keeps_user_supplied_flag(monkeypatch):
     seen: list[tuple[str, bool]] = []
-    monkeypatch.setattr(app, "check_outbound", lambda url, user_supplied=False: seen.append((url, user_supplied)))
+    patch_seam(monkeypatch, "check_outbound", lambda url, user_supplied=False: seen.append((url, user_supplied)))
     handler = app.GuardedRedirectHandler()
     request = Request("https://open.spotify.com/album/x")
     request.user_supplied = True
@@ -319,7 +320,7 @@ def test_startup_guard_allows_loopback_or_explicit_override(overrides):
 # ------------------------------------------------------------------ 缓存
 
 def test_cache_sweep_expired_removes_only_stale_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "CACHE_DIR", tmp_path)
+    patch_seam(monkeypatch, "CACHE_DIR", tmp_path)
     stale = tmp_path / "stale.json"
     stale.write_text('{"payload": 1}', encoding="utf-8")
     old = time.time() - app.CACHE_TTL - 60
@@ -339,8 +340,8 @@ def test_cache_sweep_expired_removes_only_stale_files(tmp_path, monkeypatch):
 
 
 def test_cache_store_keeps_concurrent_writers_of_same_key_apart(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(app, "CACHE_ENABLED", True)
+    patch_seam(monkeypatch, "CACHE_DIR", tmp_path)
+    patch_seam(monkeypatch, "CACHE_ENABLED", True)
 
     def store(value: int) -> None:
         app.cache_store("shared-key", {"n": value})
@@ -544,7 +545,7 @@ def test_apple_jp_first_when_cn_shell_missing_tracks(monkeypatch):
         if "country=cn" in url:
             return _mk_itunes_collection("CHN", has_tracks=False)
         return _mk_itunes_collection("JPN")
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     picked = app.itunes_album_by_id("1", "cn", "Art")
     assert picked["country"] == "jp"
     assert picked["data"]["country"] == "JPN"
@@ -561,7 +562,7 @@ def test_apple_jp_missing_falls_back_to_complete_storefront(monkeypatch):
         if "country=cn" in url:
             return _mk_itunes_collection("CHN", has_tracks=False)
         return _mk_itunes_collection("USA")
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     picked = app.itunes_album_by_id("1", "cn", "Art")
     assert picked["country"] == "us"
     assert picked["data"]["country"] == "USA"
@@ -572,7 +573,7 @@ def test_apple_jp_missing_falls_back_to_complete_storefront(monkeypatch):
 
 def test_apple_jp_link_keeps_clean_jp_data(monkeypatch):
     """JP 链接：直接用 JP 区，不产生混搭提醒。"""
-    monkeypatch.setattr(app, "fetch_json", lambda url: _mk_itunes_collection("JPN"))
+    patch_seam(monkeypatch, "fetch_json", lambda url: _mk_itunes_collection("JPN"))
     picked = app.itunes_album_by_id("1", "jp", "Art")
     assert picked["country"] == "jp"
     assert picked["data"]["country"] == "JPN"
@@ -581,7 +582,7 @@ def test_apple_jp_link_keeps_clean_jp_data(monkeypatch):
 
 def test_apple_nowhere_returns_empty(monkeypatch):
     """任何区都查不到：返回空 data 且 note 为空。"""
-    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    patch_seam(monkeypatch, "fetch_json", lambda url: {"results": []})
     picked = app.itunes_album_by_id("1", "cn", "Art")
     assert picked["data"] == {}
     assert picked["note"] == ""
@@ -612,7 +613,7 @@ def test_apple_west_artist_cn_link_avoids_jp_kana_name(monkeypatch):
             {"wrapperType": "track", "trackName": "T1-US", "artistName": "Taylor Swift",
              "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1},
         ]}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     picked = app.itunes_album_by_id("1", "cn", "Taylor Swift")
     assert picked["country"] == "us"
     assert picked["data"]["artist"] == "Taylor Swift"  # 英文名，不被日文化
@@ -636,7 +637,7 @@ def test_apple_no_matching_full_storefront_borrows_tracks_only(monkeypatch):
                          "collectionViewUrl": "https://music.apple.com/us/album/x/1"},
                         {"wrapperType": "track", "trackName": "T1-US", "artistName": "Hebe Tien",
                          "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1}]}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     picked = app.itunes_album_by_id("1", "cn", "田馥甄")
     assert picked["country"] == "cn"
     assert picked["data"]["country"] == "CHN"
@@ -689,7 +690,7 @@ def test_mb_work_rels_for_recording_parses_work_and_artist_rels(monkeypatch):
                 {"direction": "backward", "type": "writer", "target-type": "work", "work": {"id": "w-x"}},
             ]}
         raise AssertionError(f"unexpected path {path}")
-    monkeypatch.setattr(app, "mb_request", fake_mb)
+    patch_seam(monkeypatch, "mb_request", fake_mb)
 
     result = app.mb_work_rels_for_recording("r-1")
     assert len(result["works"]) == 1
@@ -715,7 +716,7 @@ def test_mb_work_rels_for_recording_dedupes_work(monkeypatch):
                 {"id": "w-1", "title": "Same"},
             ])
         return {"relations": []}
-    monkeypatch.setattr(app, "mb_request", fake_mb)
+    patch_seam(monkeypatch, "mb_request", fake_mb)
 
     result = app.mb_work_rels_for_recording("r-1")
     assert len(result["works"]) == 1
@@ -729,7 +730,7 @@ def test_mb_work_rels_for_recording_skips_work_fetch_on_error(monkeypatch):
             calls.append(path)
             return _mb_recording_response(works=[{"id": "w-1", "title": "Broken work"}])
         raise app.FetchError("work fetch failed")
-    monkeypatch.setattr(app, "mb_request", fake_mb)
+    patch_seam(monkeypatch, "mb_request", fake_mb)
 
     result = app.mb_work_rels_for_recording("r-1")
     assert result["works"][0]["relations"] == []  # work 查询失败不阻塞，关系留空
@@ -751,8 +752,8 @@ def test_build_work_relations_queries_with_budget_limit(monkeypatch):
                            "iswc": "", "url": f"https://musicbrainz.org/work/w-{mbid}",
                            "relations": [{"type": "composer", "artist": "A", "artist_mbid": "a-1", "attributes": []}]}],
                 "recording_relations": []}
-    monkeypatch.setattr(app, "mb_work_rels_for_recording", fake_recording)
-    monkeypatch.setattr(app, "MAX_WORK_RELS_TRACKS", 2)
+    patch_seam(monkeypatch, "mb_work_rels_for_recording", fake_recording)
+    patch_seam(monkeypatch, "MAX_WORK_RELS_TRACKS", 2)
 
     result = app.build_work_relations(tracks)
     assert result["status"] == "partial"
@@ -771,7 +772,7 @@ def test_build_work_relations_records_failures(monkeypatch):
         if mbid == "r-1":
             raise app.FetchError("rate limited 503")
         return {"works": [], "recording_relations": []}
-    monkeypatch.setattr(app, "mb_work_rels_for_recording", fake_recording)
+    patch_seam(monkeypatch, "mb_work_rels_for_recording", fake_recording)
 
     result = app.build_work_relations(tracks)
     assert result["status"] == "partial"
@@ -819,7 +820,7 @@ def test_itunes_album_from_song_returns_collection(monkeypatch):
             "collectionViewUrl": "https://music.apple.com/us/album/the-life/6814997249",
         }],
     }
-    monkeypatch.setattr(app, "fetch_json", lambda url: fake)
+    patch_seam(monkeypatch, "fetch_json", lambda url: fake)
     result = app.itunes_album_from_song("6814997402")
     assert result["collection_id"] == "6814997249"
     assert result["collection_name"] == "The Life of a Showgirl: The Encore"
@@ -828,9 +829,9 @@ def test_itunes_album_from_song_returns_collection(monkeypatch):
 
 
 def test_itunes_album_from_song_empty_when_missing_collection(monkeypatch):
-    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": [{"wrapperType": "track", "collectionId": ""}]})
+    patch_seam(monkeypatch, "fetch_json", lambda url: {"results": [{"wrapperType": "track", "collectionId": ""}]})
     assert app.itunes_album_from_song("999") == {}
-    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    patch_seam(monkeypatch, "fetch_json", lambda url: {"results": []})
     assert app.itunes_album_from_song("999") == {}
 
 
@@ -858,7 +859,7 @@ def test_parse_apple_credits_extracts_groups():
 def test_collect_apple_credits_rewrites_album_expansion_to_song_page(monkeypatch):
     """专辑展开页（album/…?i=<trackId>）不渲染 Credits，应改抓对应歌曲页。"""
     seen: list[str] = []
-    monkeypatch.setattr(app, "fetch_text", lambda url: seen.append(url) or APPLE_CREDITS_HTML)
+    patch_seam(monkeypatch, "fetch_text", lambda url: seen.append(url) or APPLE_CREDITS_HTML)
     result = app.collect_apple_credits(
         "https://music.apple.com/cn/album/some-album/1234567890?i=6814997402", "The Fate of Ophelia")
     assert seen == ["https://music.apple.com/cn/song/6814997402"]
@@ -871,12 +872,12 @@ def test_parse_apple_credits_empty_on_no_sections():
 
 
 def test_collect_apple_credits_only_for_song_pages(monkeypatch):
-    monkeypatch.setattr(app, "fetch_text", lambda url: APPLE_CREDITS_HTML)
+    patch_seam(monkeypatch, "fetch_text", lambda url: APPLE_CREDITS_HTML)
     result = app.collect_apple_credits("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402", "The Fate of Ophelia")
     assert result["track"] == "The Fate of Ophelia"
     assert len(result["groups"]) == 3
     # 非歌曲页 / 非 apple 域名 / 页面抓不到都返回空
-    monkeypatch.setattr(app, "fetch_text", lambda url: (_ for _ in ()).throw(app.FetchError("boom")))
+    patch_seam(monkeypatch, "fetch_text", lambda url: (_ for _ in ()).throw(app.FetchError("boom")))
     assert app.collect_apple_credits("https://music.apple.com/cn/song/x/1") == {}
     assert app.collect_apple_credits("https://music.apple.com/cn/album/x/1") == {}   # 专辑页无 ?i=
     assert app.collect_apple_credits("https://example.com/song/1") == {}
@@ -970,7 +971,7 @@ def test_mb_search_recording_basic(monkeypatch):
         "isrcs": ["USUG12506436"], "length": 226000,
         "releases": [{"title": "The Life of a Showgirl: The Encore"}],
     }]}
-    monkeypatch.setattr(app, "mb_request", lambda path, params: fake if path == "recording" else {})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: fake if path == "recording" else {})
     rows = app.mb_search_recording("The Fate of Ophelia", "Taylor Swift")
     assert rows[0]["mbid"] == "abc-123"
     assert rows[0]["isrc"] == "USUG12506436"
@@ -995,9 +996,9 @@ def _fake_itunes_track():
 
 
 def test_build_song_report_full(monkeypatch):
-    monkeypatch.setattr(app, "fetch_json", lambda url: _fake_itunes_track())
-    monkeypatch.setattr(app, "mb_request", lambda path, params: _mb_song_payload(path, params))
-    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
+    patch_seam(monkeypatch, "fetch_json", lambda url: _fake_itunes_track())
+    patch_seam(monkeypatch, "mb_request", lambda path, params: _mb_song_payload(path, params))
+    patch_seam(monkeypatch, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
     report = app.build_song_report("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
                                    ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"],
                                    "apple", "6814997402")
@@ -1049,17 +1050,17 @@ def _fake_apple_credit(track_title):
 
 
 def test_build_song_report_lookup_fails(monkeypatch):
-    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    patch_seam(monkeypatch, "fetch_json", lambda url: {"results": []})
     report = app.build_song_report("https://music.apple.com/cn/song/x/999", ["https://music.apple.com/cn/song/x/999"], "apple", "999")
     assert report.get("needs_selection") is True
 
 
 def test_build_song_report_mb_fails_but_credits_ok(monkeypatch):
-    monkeypatch.setattr(app, "fetch_json", lambda url: _fake_itunes_track())
+    patch_seam(monkeypatch, "fetch_json", lambda url: _fake_itunes_track())
     def boom(path, params):
         raise app.FetchError("MB unreachable")
-    monkeypatch.setattr(app, "mb_request", boom)
-    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
+    patch_seam(monkeypatch, "mb_request", boom)
+    patch_seam(monkeypatch, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
     report = app.build_song_report("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
                                    ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"], "apple", "6814997402")
     assert report["recording"] == {}
@@ -1074,16 +1075,16 @@ def test_build_song_report_japanese_lyric_sites(monkeypatch):
     itunes = _fake_itunes_track()
     itunes["results"][0]["trackName"] = "夜に駆ける"
     itunes["results"][0]["artistName"] = "YOASOBI"
-    monkeypatch.setattr(app, "fetch_json", lambda url: itunes)
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
-    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": {})
+    patch_seam(monkeypatch, "fetch_json", lambda url: itunes)
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "collect_apple_credits", lambda url, track_title="": {})
     report = app.build_song_report("https://music.apple.com/cn/song/夜に駆ける/111", ["https://music.apple.com/cn/song/夜に駆ける/111"], "apple", "111")
     sites = [l["site"] for l in report["lyrics_candidates"][0]["links"]]
     assert "J-Lyric.net" in sites and "UtaTen" in sites
 
 
 def test_build_report_routes_song_to_song_report(monkeypatch):
-    monkeypatch.setattr(app, "build_song_report", lambda *a, **k: {"report_type": "song", "song": {"title": "x"}})
+    patch_seam(monkeypatch, "build_song_report", lambda *a, **k: {"report_type": "song", "song": {"title": "x"}})
     report = app.build_report("", "https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402")
     assert report["report_type"] == "song"
 
@@ -1102,15 +1103,15 @@ def test_detect_song_url_platforms():
 
 
 def test_build_song_report_spotify(monkeypatch):
-    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+    patch_seam(monkeypatch, "spotify_track", lambda track_id: {
         "id": "5Xecnqa3ODQuCK9BCms2VK", "title": "The Fate of Ophelia", "artist": "Taylor Swift",
         "album": "The Life of a Showgirl: The Encore", "album_id": "4hF2gTGuPYlykYuphDxi8J",
         "album_url": "https://open.spotify.com/album/4hF2gTGuPYlykYuphDxi8J", "isrc": "USUG12506436",
         "date": "2026-09-25", "length": "3:46", "url": "https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK",
         "image": "https://i.scdn.co/image/abc", "source": "Spotify 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
-    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})  # itunes credits 搜索找不到（降级）
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "fetch_json", lambda url: {"results": []})  # itunes credits 搜索找不到（降级）
     report = app.build_song_report("https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK",
                                    ["https://open.spotify.com/track/5Xecnqa3ODQuCK9BCms2VK"], "spotify", "5Xecnqa3ODQuCK9BCms2VK")
     assert report["report_type"] == "song"
@@ -1125,15 +1126,15 @@ def test_build_song_report_spotify(monkeypatch):
 
 
 def test_build_song_report_deezer(monkeypatch):
-    monkeypatch.setattr(app, "deezer_track", lambda track_id: {
+    patch_seam(monkeypatch, "deezer_track", lambda track_id: {
         "id": "123456789", "title": "The Fate of Ophelia", "artist": "Taylor Swift",
         "album": "The Life of a Showgirl: The Encore", "album_id": "987654321",
         "album_url": "https://www.deezer.com/album/987654321", "isrc": "USUG12506436",
         "date": "2026-09-25", "length": "3:46", "url": "https://www.deezer.com/track/123456789",
         "image": "https://cdns-preview-x.dzcdn.net/x.jpg", "source": "Deezer 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
-    monkeypatch.setattr(app, "fetch_json", lambda url: {"results": []})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "fetch_json", lambda url: {"results": []})
     report = app.build_song_report("https://www.deezer.com/track/123456789",
                                    ["https://www.deezer.com/track/123456789"], "deezer", "123456789")
     s = report["song"]
@@ -1144,20 +1145,20 @@ def test_build_song_report_deezer(monkeypatch):
 
 
 def test_build_song_report_spotify_uses_apple_credits(monkeypatch):
-    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+    patch_seam(monkeypatch, "spotify_track", lambda track_id: {
         "id": "t1", "title": "夜に駆ける", "artist": "YOASOBI", "album": "夜に駆ける",
         "album_id": "a1", "album_url": "https://open.spotify.com/album/a1", "isrc": "",
         "date": "", "length": "4:21", "url": "https://open.spotify.com/track/t1", "image": "",
         "source": "Spotify 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
     # iTunes 搜到 Apple 页面 → 抓到 credits → credits_only
     def fake_fetch(url):
         if url.startswith("https://itunes.apple.com/search"):
             return {"results": [{"wrapperType": "track", "trackName": "夜に駆ける", "trackViewUrl": "https://music.apple.com/jp/song/x/123?i=456&uo=4"}]}
         return {"results": []}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
-    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title) if "apple.com" in url else {})
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title) if "apple.com" in url else {})
     report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
     assert report["work_relations"]["status"] == "credits_only"
     assert report["apple_credits"][0]["track"] == "夜に駆ける"
@@ -1166,8 +1167,8 @@ def test_build_song_report_spotify_uses_apple_credits(monkeypatch):
 # ------------------------------------------------------------ Sonovault ISRC 补查
 
 def test_sonovault_track_search_parses_and_filters(monkeypatch):
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"results": [
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "test-key")
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: {"results": [
         {"id": 1, "title": "Around the World (loop)", "artists": [{"name": "Daft Punk"}], "isrc": None, "iswc": None},
         {"id": 2, "title": "Around the World", "artists": [{"name": "Masters At Work"}, {"name": "Daft Punk"}], "isrc": "GBDUW0600009", "iswc": None},
     ]})
@@ -1177,27 +1178,27 @@ def test_sonovault_track_search_parses_and_filters(monkeypatch):
 
 
 def test_sonovault_track_search_skips_without_key(monkeypatch):
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "")
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"results": [{"isrc": "X"}]})
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "")
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: {"results": [{"isrc": "X"}]})
     assert app.sonovault_track_search("a", "b") == {}
 
 
 def test_build_song_report_spotify_sonovault_fills_isrc(monkeypatch):
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
-    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "test-key")
+    patch_seam(monkeypatch, "spotify_track", lambda track_id: {
         "id": "t1", "title": "The Fate of Ophelia", "artist": "Taylor Swift",
         "album": "The Life of a Showgirl: The Encore", "album_id": "", "album_url": "",
         "isrc": "", "date": "2026-09-25", "length": "4:00",
         "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
     def fake_fetch(url, headers=None):
         if "api.sonovault.now" in url:
             return {"results": [{"id": 9, "title": "The Fate of Ophelia", "artists": [{"name": "Taylor Swift"}], "isrc": "USUMV2503024", "iswc": "T-123.456.789-0"}]}
         if url.startswith("https://itunes.apple.com/search"):
             return {"results": []}
         return {"results": []}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
     assert report["song"]["isrc"] == "USUMV2503024"
     assert report["song"]["iswc"] == "T-123.456.789-0"
@@ -1205,20 +1206,20 @@ def test_build_song_report_spotify_sonovault_fills_isrc(monkeypatch):
 
 
 def test_build_song_report_spotify_sonovault_miss_stays_silent(monkeypatch):
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
-    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "test-key")
+    patch_seam(monkeypatch, "spotify_track", lambda track_id: {
         "id": "t1", "title": "夜に駆ける", "artist": "YOASOBI", "album": "夜に駆ける",
         "album_id": "", "album_url": "", "isrc": "", "date": "", "length": "4:21",
         "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
     def fake_fetch(url, headers=None):
         if "api.sonovault.now" in url:
             return {"results": []}
         if url.startswith("https://itunes.apple.com/search"):
             return {"results": []}
         return {"results": []}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
     assert report["song"]["isrc"] == ""
     assert not any("Sonovault" in err.get("error", "") for err in report["source_errors"])
@@ -1227,13 +1228,13 @@ def test_build_song_report_spotify_sonovault_miss_stays_silent(monkeypatch):
 # ------------------------------------------------------------ Soundcharts ISRC 补查
 
 def test_soundcharts_by_platform_id_parses_envelope(monkeypatch):
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
     seen: list[str] = []
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: (
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: (
         seen.append(url) or {
             "type": "song",
             "object": {
@@ -1257,13 +1258,13 @@ def test_soundcharts_by_platform_id_parses_envelope(monkeypatch):
 
 def test_soundcharts_platform_code_mapping(monkeypatch):
     # 歌曲级 Apple 链接的 Soundcharts 平台代码是 itunes（不是 apple-music）
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
     seen: list[str] = []
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: (
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: (
         seen.append(url) or {"object": {"uuid": "u", "name": "x", "isrc": {"value": "USX"}}}
     ))
     got = app.soundcharts_song_by_platform_id("apple", "42")
@@ -1272,55 +1273,55 @@ def test_soundcharts_platform_code_mapping(monkeypatch):
 
 
 def test_soundcharts_skips_without_credentials(monkeypatch):
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"object": {"uuid": "x"}})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: {"object": {"uuid": "x"}})
     assert app.soundcharts_song_by_platform_id("spotify", "t1") == {}
 
 
 def test_soundcharts_unknown_source_skipped(monkeypatch):
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"object": {"uuid": "x"}})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: {"object": {"uuid": "x"}})
     assert app.soundcharts_song_by_platform_id("youtube", "t1") == {}
 
 
 def test_soundcharts_no_match_returns_empty(monkeypatch):
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "fetch_json", lambda url, headers=None: {"message": "No song found"})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "fetch_json", lambda url, headers=None: {"message": "No song found"})
     assert app.soundcharts_song_by_platform_id("spotify", "t1") == {}
 
 
 def test_soundcharts_404_not_found_stays_silent(monkeypatch):
     # 404 = 曲库未收录，属于正常结果，静默返回 {}（不抛错、不上 warning）
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
     def not_found(url, headers=None):
         raise app.FetchError("HTTP Error 404: Not Found")
-    monkeypatch.setattr(app, "fetch_json", not_found)
+    patch_seam(monkeypatch, "fetch_json", not_found)
     assert app.soundcharts_song_by_platform_id("spotify", "t1") == {}
 
 
 def test_soundcharts_401_raises_for_caller(monkeypatch):
     # 401 = 凭据问题，需要让调用方知道（区别于未收录）
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "wrong-key")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "wrong-key")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
     def unauthorized(url, headers=None):
         raise app.FetchError("HTTP Error 401: Unauthorized")
-    monkeypatch.setattr(app, "fetch_json", unauthorized)
+    patch_seam(monkeypatch, "fetch_json", unauthorized)
     try:
         app.soundcharts_song_by_platform_id("spotify", "t1")
         raise AssertionError("401 应该抛 FetchError")
@@ -1330,18 +1331,18 @@ def test_soundcharts_401_raises_for_caller(monkeypatch):
 
 def test_build_song_report_spotify_soundcharts_fills_isrc_when_sonovault_misses(monkeypatch):
     # Sonovault 未命中（日文原文标题不索引等）→ Soundcharts 按平台曲目 ID 直查补上
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
-    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "test-key")
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "spotify_track", lambda track_id: {
         "id": "t1", "title": "夜に駆ける", "artist": "YOASOBI", "album": "夜に駆ける",
         "album_id": "", "album_url": "", "isrc": "", "date": "", "length": "4:21",
         "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
     def fake_fetch(url, headers=None):
         if "api.sonovault.now" in url:
             return {"results": []}
@@ -1357,7 +1358,7 @@ def test_build_song_report_spotify_soundcharts_fills_isrc_when_sonovault_misses(
         if url.startswith("https://itunes.apple.com/search"):
             return {"results": []}
         return {"results": []}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
     assert report["song"]["isrc"] == "JPP301900716"
     assert report["song"]["iswc"] == "T-101.234.567-8"
@@ -1366,19 +1367,19 @@ def test_build_song_report_spotify_soundcharts_fills_isrc_when_sonovault_misses(
 
 def test_build_song_report_sonovault_hit_does_not_call_soundcharts(monkeypatch):
     # Sonovault 命中时不触发 Soundcharts（Soundcharts 计费，省调用）
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "test-key")
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "soundcharts")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "test-key")
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "soundcharts")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
     calls: list[str] = []
-    monkeypatch.setattr(app, "spotify_track", lambda track_id: {
+    patch_seam(monkeypatch, "spotify_track", lambda track_id: {
         "id": "t1", "title": "The Fate of Ophelia", "artist": "Taylor Swift", "album": "a",
         "album_id": "", "album_url": "", "isrc": "", "date": "", "length": "4:00",
         "url": "https://open.spotify.com/track/t1", "image": "", "source": "Spotify 曲目",
     })
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {"recordings": [], "relations": [], "works": []})
     def fake_fetch(url, headers=None):
         calls.append(url)
         if "api.sonovault.now" in url:
@@ -1386,7 +1387,7 @@ def test_build_song_report_sonovault_hit_does_not_call_soundcharts(monkeypatch):
         if url.startswith("https://itunes.apple.com/search"):
             return {"results": []}
         return {"results": []}
-    monkeypatch.setattr(app, "fetch_json", fake_fetch)
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
     report = app.build_song_report("https://open.spotify.com/track/t1", ["https://open.spotify.com/track/t1"], "spotify", "t1")
     assert report["song"]["isrc"] == "USUMV2503024"
     assert not any("customer.api.soundcharts.com" in u for u in calls)
@@ -1395,11 +1396,11 @@ def test_build_song_report_sonovault_hit_does_not_call_soundcharts(monkeypatch):
 # ------------------------------------------------------------ /api/usage 用量查询
 
 def test_collect_usage_status_not_configured(monkeypatch):
-    monkeypatch.setattr(app, "SONOVAULT_API_KEY", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
+    patch_seam(monkeypatch, "SONOVAULT_API_KEY", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "")
     status = app.collect_usage_status()
     assert status["sources"]["sonovault"]["configured"] is False
     assert status["sources"]["soundcharts"]["configured"] is False
@@ -1408,12 +1409,12 @@ def test_collect_usage_status_not_configured(monkeypatch):
 
 
 def test_collect_usage_status_soundcharts_fetches_usage(monkeypatch):
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "cid")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {})
-    monkeypatch.setattr(app, "soundcharts_team_usage", lambda: {
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "cid")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {})
+    patch_seam(monkeypatch, "soundcharts_team_usage", lambda: {
         "quota": {"limit": 1000, "used": 1, "remaining": 999, "period": "", "end_period_date": None},
         "rate_limit": {"limit_per_minute": 10000, "used": 0, "remaining": 10000, "reset_in_seconds": 37},
     })
@@ -1445,12 +1446,18 @@ def test_soundcharts_team_usage_parses_envelope(monkeypatch):
         def open(self, req, timeout=20):
             return FakeResp()
 
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_ID", "cid")
-    monkeypatch.setattr(app, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
-    monkeypatch.setattr(app, "SOUNDCHARTS_APP_ID", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_API_KEY", "")
-    monkeypatch.setattr(app, "SOUNDCHARTS_TOKEN_CACHE", {"token": "tok", "expires_at": app.time.time() + 3600})
-    monkeypatch.setattr(app, "GUARDED_OPENER", FakeOpener())
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_ID", "cid")
+    patch_seam(monkeypatch, "SOUNDCHARTS_CLIENT_SECRET", "csecret")
+    patch_seam(monkeypatch, "SOUNDCHARTS_APP_ID", "")
+    patch_seam(monkeypatch, "SOUNDCHARTS_API_KEY", "")
+    # 用 tests 自己 import 的 time，不要写 app.time —— 那是"顺手拿到 app 里
+    # 恰好 import 过的 stdlib 模块"，属于偶然耦合：app 一旦不再需要 time，
+    # 测试就跟着断，而断的原因和被测逻辑毫无关系。
+    patch_seam(monkeypatch, "SOUNDCHARTS_TOKEN_CACHE", {"token": "tok", "expires_at": time.time() + 3600})
+    # soundcharts_team_usage 刻意不走 fetch_json（用量要实时，不能被缓存住），
+    # 因此它自己调 check_outbound —— 那一层会做真实 DNS 解析。只 mock opener 不够。
+    patch_seam(monkeypatch, "check_outbound", lambda *a, **k: None)
+    patch_seam(monkeypatch, "GUARDED_OPENER", FakeOpener())
     got = app.soundcharts_team_usage()
     assert got["quota"]["remaining"] == 999
     assert got["rate_limit"]["limit_per_minute"] == 10000
@@ -1547,14 +1554,14 @@ def test_song_report_mb_note_ignores_other_source_errors(monkeypatch):
     """
     itunes = _fake_itunes_track()
     itunes["results"][0].pop("isrc")     # 没有 ISRC 才会去问 Sonovault
-    monkeypatch.setattr(app, "fetch_json", lambda url: itunes)
-    monkeypatch.setattr(app, "mb_request", lambda path, params: _mb_song_payload(path, params))
-    monkeypatch.setattr(app, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
+    patch_seam(monkeypatch, "fetch_json", lambda url: itunes)
+    patch_seam(monkeypatch, "mb_request", lambda path, params: _mb_song_payload(path, params))
+    patch_seam(monkeypatch, "collect_apple_credits", lambda url, track_title="": _fake_apple_credit(track_title))
 
     def boom(*args, **kwargs):
         raise app.FetchError("sonovault down")
 
-    monkeypatch.setattr(app, "sonovault_track_search", boom)
+    patch_seam(monkeypatch, "sonovault_track_search", boom)
     report = app.build_song_report("https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402",
                                    ["https://music.apple.com/cn/song/the-fate-of-ophelia/6814997402"], "apple", "6814997402")
 
@@ -1603,15 +1610,15 @@ def _album_nets(monkeypatch, linked_collection_id: str = "6814997249"):
         credits_calls.append((url, track_title))
         return _fake_apple_credit(track_title)
 
-    monkeypatch.setattr(app, "fetch_text", lambda url, *a, **k: "<html><head><title>Album</title></head><body></body></html>")
-    monkeypatch.setattr(app, "fetch_json", fake_fetch_json)
-    monkeypatch.setattr(app, "mb_request", lambda path, params: {})
-    monkeypatch.setattr(app, "mb_reverse_release_ids", lambda url: [])
-    monkeypatch.setattr(app, "spotify_search", lambda query: [])
-    monkeypatch.setattr(app, "sonovault_track_search", lambda *a, **k: {})
-    monkeypatch.setattr(app, "soundcharts_song_by_platform_id", lambda *a, **k: {})
-    monkeypatch.setattr(app, "collect_apple_credits", fake_credits)
-    monkeypatch.setattr(app, "GUARDED_OPENER", NoNetwork())
+    patch_seam(monkeypatch, "fetch_text", lambda url, *a, **k: "<html><head><title>Album</title></head><body></body></html>")
+    patch_seam(monkeypatch, "fetch_json", fake_fetch_json)
+    patch_seam(monkeypatch, "mb_request", lambda path, params: {})
+    patch_seam(monkeypatch, "mb_reverse_release_ids", lambda url: [])
+    patch_seam(monkeypatch, "spotify_search", lambda query: [])
+    patch_seam(monkeypatch, "sonovault_track_search", lambda *a, **k: {})
+    patch_seam(monkeypatch, "soundcharts_song_by_platform_id", lambda *a, **k: {})
+    patch_seam(monkeypatch, "collect_apple_credits", fake_credits)
+    patch_seam(monkeypatch, "GUARDED_OPENER", NoNetwork())
     return credits_calls, leaked
 
 

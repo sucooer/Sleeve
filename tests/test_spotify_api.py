@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 import app  # noqa: E402
+from testkit import patch_seam  # noqa: E402
 
 
 # ------------------------------------------------------------------ Spotify 官方 API 适配层
@@ -80,26 +81,26 @@ def test_spotify_normalize_album_returns_empty_for_bad_payload():
 
 def test_spotify_album_falls_back_to_proxy_when_official_fails(monkeypatch):
     """官方通道失败时回落到反代，不能让 Spotify 整条线索断掉。"""
-    monkeypatch.setattr(app, "spotify_configured", lambda: True)
-    monkeypatch.setattr(app, "spotify_api_get", lambda path, params=None: (_ for _ in ()).throw(app.FetchError("boom")))
+    patch_seam(monkeypatch, "spotify_configured", lambda: True)
+    patch_seam(monkeypatch, "spotify_api_get", lambda path, params=None: (_ for _ in ()).throw(app.FetchError("boom")))
 
     def fake_post(url, payload, headers=None, timeout=25, retries=2):
         return {"id": "proxy1", "name": "Proxy Album", "external_ids": {"upc": "1111111111111"},
                 "artists": [{"name": "P"}], "tracks": {"items": []}}
 
-    monkeypatch.setattr(app, "post_json", fake_post)
+    patch_seam(monkeypatch, "post_json", fake_post)
     result = app.spotify_album("abc")
     assert result["title"] == "Proxy Album"
     assert result["upc"] == "1111111111111"
 
 
 def test_spotify_album_prefers_official_api_when_configured(monkeypatch):
-    monkeypatch.setattr(app, "spotify_configured", lambda: True)
-    monkeypatch.setattr(app, "spotify_api_get", lambda path, params=None: {
+    patch_seam(monkeypatch, "spotify_configured", lambda: True)
+    patch_seam(monkeypatch, "spotify_api_get", lambda path, params=None: {
         "id": "official1", "name": "Official Album", "artists": [{"name": "O"}],
         "external_ids": {"upc": "2222222222222"}, "tracks": {"items": []},
     })
-    monkeypatch.setattr(app, "post_json", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应走反代")))
+    patch_seam(monkeypatch, "post_json", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应走反代")))
     result = app.spotify_album("abc")
     assert result["title"] == "Official Album"
     assert result["upc"] == "2222222222222"
