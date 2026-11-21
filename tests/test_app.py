@@ -622,6 +622,43 @@ def test_apple_west_artist_cn_link_avoids_jp_kana_name(monkeypatch):
     assert "US 区" in picked["note"]
 
 
+def test_apple_jp_artist_cn_link_prefers_jp_native_script(monkeypatch):
+    """日音歌手 CN 链接：CN 页面为罗马字（TAKANE NO NADESHIKO）且缺曲目，
+    JP 区有完整数据且艺人/曲目为日文汉字假名原生 → 整单改用 JP 区，保留日文原名。"""
+    def fake_fetch(url):
+        if "country=jp" in url:
+            return {"results": [
+                {"wrapperType": "collection", "collectionName": "TEST ALBUM", "artistName": "高嶺のなでしこ",
+                 "releaseDate": "2026-01-01", "copyright": "Victor", "primaryGenreName": "J-Pop",
+                 "country": "JPN", "collectionId": "1",
+                 "collectionViewUrl": "https://music.apple.com/jp/album/x/1"},
+                {"wrapperType": "track", "trackName": "我武者羅", "artistName": "高嶺のなでしこ",
+                 "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1},
+            ]}
+        if "country=cn" in url:
+            return {"results": [
+                {"wrapperType": "collection", "collectionName": "TEST ALBUM", "artistName": "TAKANE NO NADESHIKO",
+                 "releaseDate": "2026-01-01", "copyright": "Victor", "primaryGenreName": "J-Pop",
+                 "country": "CHN", "collectionId": "1",
+                 "collectionViewUrl": "https://music.apple.com/cn/album/x/1"},
+            ]}
+        return {"results": [
+            {"wrapperType": "collection", "collectionName": "TEST ALBUM", "artistName": "TAKANE NO NADESHIKO",
+             "releaseDate": "2026-01-01", "copyright": "Victor", "primaryGenreName": "J-Pop",
+             "country": "USA", "collectionId": "1",
+             "collectionViewUrl": "https://music.apple.com/us/album/x/1"},
+            {"wrapperType": "track", "trackName": "Gamushara", "artistName": "TAKANE NO NADESHIKO",
+             "trackTimeMillis": 1000, "trackNumber": 1, "discNumber": 1},
+        ]}
+    patch_seam(monkeypatch, "fetch_json", fake_fetch)
+    picked = app.itunes_album_by_id("1", "cn", "TAKANE NO NADESHIKO")
+    assert picked["country"] == "jp"
+    assert picked["data"]["artist"] == "高嶺のなでしこ"
+    assert [t["title"] for t in picked["data"]["tracks"]] == ["我武者羅"]
+    assert "已按日本区数据整单查询" in picked["note"]
+    assert "JP 区" in picked["note"]
+
+
 def test_apple_no_matching_full_storefront_borrows_tracks_only(monkeypatch):
     """华语歌手：JP 区没有、US 区名字罗马化（Hebe Tien）与输入不符 → 不整单切换，
     保留主来源字段，只借用曲目表（艺人名保持页面一致的写法）。"""

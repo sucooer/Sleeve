@@ -299,10 +299,18 @@ def itunes_album_by_id(apple_id: str, preferred_country: str = "", artist_hint: 
             note = f"{preferred_issue}，已改用 {primary_country.upper()} 区完整数据"
         return {"data": primary, "country": primary_country, "tracks_from": primary_country, "note": note}
 
-    # 2) 链接区缺曲目：JP 区有完整数据且艺人名与输入一致（日音/JP 规范名）→ 整单改用 JP 区
+    # 2) 链接区缺曲目：JP 区有完整数据且（艺人名与输入一致，或同名专辑且艺人/曲目为日文汉字假名原生）→ 整单改用 JP 区
     if jp_data and jp_data.get("tracks"):
         jp_artist = first(jp_data.get("artist")).casefold().replace(" ", "")
-        if not wanted or jp_artist == wanted:
+        is_native_jp = bool(
+            primary.get("title")
+            and title_match_key(jp_data.get("title")) == title_match_key(primary.get("title"))
+            and (
+                re.search(r"[\u3040-\u309f\u4e00-\u9fff]", first(jp_data.get("artist")))
+                or any(re.search(r"[\u3040-\u309f\u4e00-\u9fff]", t.get("title", "")) for t in jp_data.get("tracks", []))
+            )
+        )
+        if not wanted or jp_artist == wanted or is_native_jp:
             primary, primary_country = jp_data, "jp"
             note = (f"{preferred_issue}，"
                     f"已按日本区数据整单查询（艺人、厂牌、区域、曲目表均按 JP 区）")

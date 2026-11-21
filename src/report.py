@@ -1317,9 +1317,16 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             apple_data = picked["data"]
             apple_country = picked["country"] or apple_url_country
             # 没有标题就是空壳响应，必须当没查到；否则会被当成成功的 Apple 来源，并挡住其他来源补链接
-            if not first(apple_data.get("title")) or (artist_hint and first(apple_data.get("artist")) and first(apple_data.get("artist")).casefold().replace(" ", "") != artist_hint.casefold().replace(" ", "")):
+            if not first(apple_data.get("title")) or (
+                artist_hint
+                and first(apple_data.get("artist"))
+                and first(apple_data.get("artist")).casefold().replace(" ", "") != artist_hint.casefold().replace(" ", "")
+                and picked.get("country") != "jp"
+            ):
                 apple_data = {}
             else:
+                if picked.get("country") == "jp" and first(apple_data.get("artist")):
+                    artist_hint = first(apple_data.get("artist"))
                 if picked["note"]:
                     source_warnings.append({"source": "Apple/iTunes", "warning": picked["note"]})
                 sources.append({"name": "Apple/iTunes", "status": "ok", "url": apple_data.get("url") or primary_url, "summary": apple_data})
@@ -1372,6 +1379,23 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
                     release_id = found[0]
                     reverse_used = url
                     break
+            # 优先用已知条码（Deezer / Spotify UPC）反查 MusicBrainz：
+            # 条码是物理/商用发行的绝对唯一识别符，比模糊标题/艺人匹配更准，
+            # 尤其能直接匹配到正确的日版 Release，避免匹配到罗马字 Release
+            if not release_id:
+                barcode_candidate = clean_value(deezer_data.get("upc")) or clean_value(spotify_data.get("upc"))
+                if barcode_candidate and barcode_is_plausible(barcode_candidate):
+                    try:
+                        bc_search = mb_request("release", {"query": f'barcode:"{mb_query_escape(barcode_candidate)}"', "limit": "5", "fmt": "json"})
+                        bc_releases = bc_search.get("releases") or []
+                        for r in bc_releases:
+                            r_title = first(r.get("title"))
+                            if not title_hint or title_match_key(r_title) == title_match_key(title_hint):
+                                release_id = first(r.get("id"))
+                                reverse_used = f"条码 {barcode_candidate} 反查"
+                                break
+                    except FetchError:
+                        pass
         if release_id:
             release = mb_request(f"release/{release_id}", {"inc": "artist-credits+labels+recordings+release-groups+media+url-rels", "fmt": "json"})
             mb_data = normalize_mb_release(release)
