@@ -187,11 +187,239 @@ function triggerStaggerEntrance(container) {
   if (!container) return;
   container.classList.remove("is-revealing");
   void container.offsetWidth;
-  const items = container.querySelectorAll(".reportbar, .phase, .card");
+  const items = container.querySelectorAll(".reportbar, .phase, .card, .panel-section");
   items.forEach((item, idx) => {
     item.style.setProperty("--stagger-idx", String(Math.min(idx, 16)));
   });
   container.classList.add("is-revealing");
+}
+
+// ---------- 冲突决策池渲染 ----------
+function renderConflictResolver(report) {
+  const container = $("#conflict-resolver");
+  if (!container) return;
+  const conflicts = (report.source_comparison || []).filter((row) => row.status === "conflict");
+  if (!conflicts.length) {
+    container.innerHTML = `<div class="clean-state-pill">✓ 各来源核心字段一致，无需仲裁</div>`;
+    return;
+  }
+  container.innerHTML = conflicts.map((row) => `
+    <div class="conflict-item-card">
+      <div class="conflict-field-title">
+        <span>${escapeHtml(row.field)} 差异</span>
+        <span>${row.values.length} 来源</span>
+      </div>
+      <div class="conflict-options-row">
+        ${row.values.map((v) => `
+          <button type="button" class="conflict-opt-btn" data-field="${escapeHtml(row.field)}" data-val="${escapeHtml(v.value)}" data-source="${escapeHtml(v.source)}" title="采纳此项作为当前建库值">
+            <span>${escapeHtml(v.value)}</span>
+            <span class="conflict-opt-source">${escapeHtml(v.source)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `).join("");
+}
+
+// ---------- MusicBrainz POST Seeder 一键填报 ----------
+function seedToMusicBrainz(report) {
+  if (!report || !report.release) {
+    showToast("请先查询并生成资料后再一键填报", "error");
+    return;
+  }
+  const r = report.release;
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "https://musicbrainz.org/release/add";
+  form.target = "_blank";
+  form.style.display = "none";
+
+  const addField = (name, val) => {
+    if (val === undefined || val === null || val === "" || val === "未确认") return;
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = String(val);
+    form.appendChild(input);
+  };
+
+  addField("name", r.title);
+  addField("artist_credit.names.0.name", r.artist);
+  if (r.primary_type) addField("type", r.primary_type);
+  if (r.status) addField("status", r.status);
+  if (r.packaging) addField("packaging", r.packaging);
+  if (r.language) addField("language", r.language);
+  if (r.script) addField("script", r.script);
+  if (r.barcode) addField("barcode", r.barcode);
+  if (r.country) addField("country", r.country);
+
+  if (r.date) {
+    const parts = r.date.split("-");
+    if (parts[0]) addField("date.year", parts[0]);
+    if (parts[1]) addField("date.month", parts[1]);
+    if (parts[2]) addField("date.day", parts[2]);
+  }
+
+  if (r.label) addField("labels.0.name", r.label);
+  if (r.catalog_number) addField("labels.0.catalog_number", r.catalog_number);
+
+  addField("mediums.0.format", r.format || "Digital Media");
+  const tracks = report.tracks || [];
+  tracks.forEach((track, idx) => {
+    addField(`mediums.0.track.${idx}.name`, track.title);
+    if (track.length) addField(`mediums.0.track.${idx}.length`, track.length);
+    if (track.artist && track.artist !== r.artist) {
+      addField(`mediums.0.track.${idx}.artist_credit.names.0.name`, track.artist);
+    }
+  });
+
+  const urls = report.external_links || [];
+  urls.forEach((item, idx) => {
+    addField(`urls.${idx}.url`, item.url);
+  });
+
+  const editNote = (report.edit_notes || {}).combined || "";
+  if (editNote) addField("edit_note", editNote);
+
+  document.body.appendChild(form);
+  form.submit();
+  setTimeout(() => form.remove(), 1000);
+  showToast("已打开 MusicBrainz 并通过 POST 自动预填整张发行！");
+}
+
+// ---------- MB 步骤 Tab 导航 (#1-019) ----------
+let stageTabsInitialized = false;
+function initStageTabs() {
+  const tabsNav = document.querySelector(".staging-tabs-nav");
+  if (!tabsNav) return;
+  const indicator = tabsNav.querySelector(".stage-indicator");
+
+  function updateIndicator(btn) {
+    if (!btn || !indicator) return;
+    indicator.style.width = `${btn.offsetWidth}px`;
+    indicator.style.transform = `translateX(${btn.offsetLeft - 6}px)`;
+    indicator.style.opacity = "1";
+  }
+
+  if (!stageTabsInitialized) {
+    stageTabsInitialized = true;
+    tabsNav.addEventListener("click", (e) => {
+      const tabBtn = e.target.closest(".stage-tab");
+      if (!tabBtn) return;
+      const stage = tabBtn.dataset.stage;
+      tabsNav.querySelectorAll(".stage-tab").forEach((b) => b.classList.toggle("active", b === tabBtn));
+      updateIndicator(tabBtn);
+
+      const panes = {
+        info: $("#stage-pane-info"),
+        tracks: $("#stage-pane-tracks"),
+        links: $("#stage-pane-links"),
+        audit: $("#stage-pane-audit")
+      };
+      Object.entries(panes).forEach(([key, pane]) => {
+        if (pane) pane.classList.toggle("hidden", key !== stage);
+      });
+    });
+  }
+
+  const activeBtn = tabsNav.querySelector(".stage-tab.active");
+  if (activeBtn) setTimeout(() => updateIndicator(activeBtn), 50);
+}
+
+// ---------- 伴侣分屏模式 ----------
+function toggleCompanionMode() {
+  const isCompanion = document.body.classList.toggle("companion-mode");
+  showToast(isCompanion ? "已开启分屏伴侣模式 (380px 停靠)" : "已恢复完整工作台三栏模式");
+}
+
+// ---------- 命令面板 (Cmd+K) ----------
+function executeCommand(action) {
+  if (!action) return;
+  switch (action) {
+    case "mb-seed":
+      seedToMusicBrainz(currentReport);
+      break;
+    case "copy-tracklist":
+      if (currentReport) copyText(trackParserText(currentReport), null, "Track Parser 纯文本");
+      else showToast("当前未生成任何资料", "error");
+      break;
+    case "copy-tracklist-artist":
+      if (currentReport) copyText(trackParserText(currentReport, true), null, "Track Parser（带艺人）");
+      else showToast("当前未生成任何资料", "error");
+      break;
+    case "copy-editnote":
+      if (currentReport) copyText(((currentReport.edit_notes || {}).combined || ""), null, "Edit Note 草稿");
+      else showToast("当前未生成任何资料", "error");
+      break;
+    case "copy-markdown":
+      if (currentReport) copyText(reportMarkdown(currentReport), null, "Markdown 完整报告");
+      else showToast("当前未生成任何资料", "error");
+      break;
+    case "toggle-companion":
+      toggleCompanionMode();
+      break;
+    case "fill-sample":
+      $("#btn-sample-urls")?.click();
+      break;
+    default:
+      break;
+  }
+}
+
+function initCmdPalette() {
+  const palette = $("#cmd-palette");
+  const input = $("#cmd-input");
+  const list = $("#cmd-list");
+  if (!palette || !input || !list) return;
+
+  const openPalette = () => {
+    palette.classList.remove("hidden");
+    input.value = "";
+    filterItems("");
+    input.focus();
+  };
+
+  const closePalette = () => {
+    palette.classList.add("hidden");
+  };
+
+  const filterItems = (query) => {
+    const q = query.trim().toLowerCase();
+    const items = list.querySelectorAll(".cmd-item");
+    items.forEach((item) => {
+      const text = item.textContent.toLowerCase();
+      item.classList.toggle("hidden", q && !text.includes(q));
+    });
+  };
+
+  input.addEventListener("input", () => filterItems(input.value));
+  $("#btn-open-cmd")?.addEventListener("click", openPalette);
+
+  palette.addEventListener("click", (e) => {
+    if (e.target === palette) closePalette();
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if (palette.classList.contains("hidden")) openPalette();
+      else closePalette();
+    }
+    if (e.key === "Escape" && !palette.classList.contains("hidden")) {
+      closePalette();
+    }
+    if (e.altKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      toggleCompanionMode();
+    }
+  });
+
+  list.addEventListener("click", (e) => {
+    const item = e.target.closest(".cmd-item");
+    if (!item) return;
+    executeCommand(item.dataset.action);
+    closePalette();
+  });
 }
 
 function renderReport(report) {
@@ -204,6 +432,7 @@ function renderReport(report) {
   currentReport = report;
   // #results 与 #song-results 是同级区块：上一次查询可能是单曲报告，切回专辑报告时
   // 必须显式收起它，否则两份报告会同时挂在页面上。
+  $("#staging-empty")?.classList.add("hidden");
   $("#song-results").classList.add("hidden");
   $("#results").classList.remove("hidden");
   $("#report-title").textContent = report.release.title || "建库资料";
@@ -330,17 +559,17 @@ function renderReport(report) {
   // 完成度分母由**实际渲染的字段**推导（发行字段 + 来源对比字段），不再写死 21：
   // 后端加字段时写死的分母会静默失真，进度条永远是错的
   renderRail(report, fields.length + (report.source_comparison || []).length);
-  // 工具栏高度会随标题换行 / 按钮换行变化，左导航与锚点的让位量要跟着实测值走
-  syncBarOffset();
+  renderConflictResolver(report);
+  initStageTabs();
   const resultsBox = $("#results");
   triggerStaggerEntrance(resultsBox);
   const activeTab = document.querySelector(".tracklist-tabs .tab-btn.active");
   if (activeTab) updateTabIndicator(activeTab);
-  window.scrollTo({ top: resultsBox.offsetTop - 20, behavior: "smooth" });
 }
 
 function renderSongReport(report) {
   const s = report.song || {};
+  $("#staging-empty")?.classList.add("hidden");
   $("#results").classList.add("hidden");
   const box = $("#song-results");
   box.classList.remove("hidden");
@@ -1133,6 +1362,34 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  // 冲突裁决项点击
+  const conflictBtn = event.target.closest(".conflict-opt-btn");
+  if (conflictBtn && currentReport && currentReport.release) {
+    const field = conflictBtn.dataset.field;
+    const val = conflictBtn.dataset.val;
+    const source = conflictBtn.dataset.source;
+    const fieldMap = {
+      "Title": "title",
+      "Artist": "artist",
+      "Release group": "release_group",
+      "Primary type": "primary_type",
+      "Status": "status",
+      "Date": "date",
+      "Country": "country",
+      "Label / imprint": "label",
+      "Catalog number": "catalog_number",
+      "Barcode": "barcode"
+    };
+    const prop = fieldMap[field];
+    if (prop) {
+      currentReport.release[prop] = val;
+      renderReport(currentReport);
+      flashCopied(conflictBtn);
+      showToast(`已将 ${field} 采纳为：${val}（来自 ${source}）`);
+    }
+    return;
+  }
+
   // 曲目表 Tab 切换 (#1-019)
   const tabBtn = event.target.closest(".tracklist-tabs .tab-btn");
   if (tabBtn) {
@@ -1319,15 +1576,20 @@ document.addEventListener("click", async (event) => {
   btn.addEventListener("click", () => window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" }));
 })();
 
-// 左上角品牌徽标（Sleeve 图标）：点击返回首页 —— 收起报告区、清掉分享链接参数、回到首屏。
+// 左上角品牌徽标（Sleeve 图标）：点击返回首页 —— 收起报告区、清掉分享链接参数、回到空白引导态。
 $(".brand").addEventListener("click", () => {
-  $("#results").classList.add("hidden");
-  $("#song-results").classList.add("hidden");
+  $("#results")?.classList.add("hidden");
+  $("#song-results")?.classList.add("hidden");
+  $("#staging-empty")?.classList.remove("hidden");
   currentReport = null;
-  try { history.replaceState(null, "", location.pathname); } catch (error) { /* file:// 等环境不允许改地址栏时忽略 */ }
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+  try { history.replaceState(null, "", location.pathname); } catch (error) { /* ignore */ }
+  showToast("已重置工作台并返回首页");
 });
+
+// MusicBrainz 一键填报与分屏伴侣模式按钮绑定
+$("#btn-mb-seed-top")?.addEventListener("click", () => seedToMusicBrainz(currentReport));
+$("#btn-mb-seed-main")?.addEventListener("click", () => seedToMusicBrainz(currentReport));
+$("#btn-companion-toggle")?.addEventListener("click", toggleCompanionMode);
 
 // 数据源用量小徽标（右下角）：Soundcharts 配额余量。
 // 只在配了 Soundcharts 且用量可查时显示；未配置、查询失败或用量格式异常都静默隐藏。
@@ -1349,11 +1611,20 @@ async function loadUsageBadge() {
   } catch (error) { /* 用量显示失败不打扰主流程 */ }
 }
 
-// 启动认证检查（放在文件末尾：$ 与 DOM 都已就绪）。
-// 用量徽标在认证流程走完后一并加载（未登录时 401 会由 apiFetch 弹回登录层）。
+// 启动认证检查、命令面板与工作流 Tab 监听
 initAuth().finally(loadUsageBadge);
+initCmdPalette();
+initStageTabs();
 
 window.addEventListener("resize", () => {
   const activeTab = document.querySelector(".tracklist-tabs .tab-btn.active");
   if (activeTab) updateTabIndicator(activeTab);
+  const activeStage = document.querySelector(".staging-tabs-nav .stage-tab.active");
+  if (activeStage) {
+    const ind = document.querySelector(".staging-tabs-nav .stage-indicator");
+    if (ind) {
+      ind.style.width = `${activeStage.offsetWidth}px`;
+      ind.style.transform = `translateX(${activeStage.offsetLeft - 6}px)`;
+    }
+  }
 });

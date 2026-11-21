@@ -3,58 +3,42 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1e1f22" />
-  <meta name="description" content="MusicBrainz 建库资料准备工具：粘贴专辑链接即可自动倒查品番、条码、厂牌和逐轨 ISRC。" />
-  <title>Sleeve · 数字合辑建库助手</title>
-  <!--
-    站点图标三件套：
-    - SVG 给现代浏览器，任意缩放都清晰（含高分屏）
-    - ICO 兜底旧浏览器与 Windows 任务栏（内含 16/32/48 三个尺寸）
-    - apple-touch-icon 给 iOS 添加到主屏，那一份必须铺满方块不留透明，
-      因为 iOS 会自己套圆角遮罩，自带透明圆角会变成双重圆角、四角发黑
-  -->
+  <meta name="theme-color" content="#0d0f14" />
+  <meta name="description" content="Sleeve 2.0 · 专业级 MusicBrainz 数字合辑与单曲建库分屏工作台。" />
+  <title>Sleeve 2.0 · MusicBrainz 建库工作台</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="32x32" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <!-- 装到桌面/主屏用：Android 走 manifest，iOS 不读 manifest 的图标，
-       靠上面那支 apple-touch-icon 加下面这行标题 -->
   <link rel="manifest" href="/site.webmanifest" />
   <meta name="apple-mobile-web-app-title" content="Sleeve" />
   <link rel="stylesheet" href="/styles.css?v=__VERSION__" />
 </head>
-<body>
-  <!-- 背景光斑：毛玻璃需要有东西可以采样 -->
-  <div class="bg" aria-hidden="true">
-    <span class="blob blob-a"></span>
-    <span class="blob blob-b"></span>
-    <span class="blob blob-c"></span>
-    <span class="blob blob-d"></span>
-  </div>
+<body class="cockpit-theme">
 
-  <!-- 加载动画：刷新 / 重新打开页面时先显示这里（替代会闪现的认证窗口），
-       app.js 完成 /api/health 检查后隐藏。无凭据或认证过期时才换成登录层。 -->
+  <!-- 加载启动层 -->
   <div id="splash-screen" class="splash-screen" aria-hidden="true">
-    <svg class="splash-mark" width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="2" y="2" width="20" height="20" rx="5" fill="#5865F2" />
-      <path d="M7.2 16.8V8.4h3.6c2.2 0 3.5 1.3 3.5 3.2s-1.3 3.2-3.5 3.2H9.6v2h-2.4Zm2.4-4.1h1.2c.9 0 1.4-.4 1.4-1.1s-.5-1.1-1.4-1.1H9.6v2.2Z" fill="#fff" />
-      <path d="M14.9 16.8v-8.4h2.3v8.4h-2.3Z" fill="#fff" />
-    </svg>
-    <div class="splash-spinner"></div>
-    <div class="splash-text">正在加载…</div>
-  </div>
-
-  <!-- 登录层：服务端开启 SLEEVE_AUTH 时，前端用自己的登录界面收凭据（替代浏览器
-       原生 Basic 弹窗）。默认隐藏，app.js 确认需要认证（无本地凭据或凭据过期）
-       后才显示；页面首屏由上面的加载动画接管，不再闪现认证窗口。 -->
-  <div id="login-overlay" class="login-overlay hidden">
-    <form id="login-form" class="login-card" autocomplete="on">
-      <svg class="login-mark" width="56" height="56" viewBox="0 0 32 32" aria-hidden="true">
-        <rect width="32" height="32" rx="7.5" fill="#5865F2" />
+    <div class="splash-brand">
+      <svg class="splash-mark" width="48" height="48" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="#5865F2" />
         <rect x="7" y="10.5" width="4" height="11" rx="2" fill="#FFFFFF" />
         <rect x="14" y="6" width="4" height="20" rx="2" fill="#FFFFFF" />
         <rect x="21" y="9" width="4" height="14" rx="2" fill="#FFFFFF" />
       </svg>
-      <h1 class="login-title">Sleeve</h1>
+      <div class="splash-spinner"></div>
+      <div class="splash-text">Sleeve 工作台就绪中…</div>
+    </div>
+  </div>
+
+  <!-- 登录校验层 -->
+  <div id="login-overlay" class="login-overlay hidden">
+    <form id="login-form" class="login-card" autocomplete="on">
+      <svg class="login-mark" width="56" height="56" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8" fill="#5865F2" />
+        <rect x="7" y="10.5" width="4" height="11" rx="2" fill="#FFFFFF" />
+        <rect x="14" y="6" width="4" height="20" rx="2" fill="#FFFFFF" />
+        <rect x="21" y="9" width="4" height="14" rx="2" fill="#FFFFFF" />
+      </svg>
+      <h1 class="login-title">Sleeve 2.0</h1>
       <p class="login-sub">登录到数字合辑建库工作台</p>
       <div class="login-field">
         <label for="login-username">用户名</label>
@@ -66,508 +50,531 @@
       </div>
       <p id="login-error" class="login-error" hidden></p>
       <button id="login-submit" type="submit">登&nbsp;录</button>
-      <p class="login-foot">本工作台需要认证后使用</p>
+      <p class="login-foot">本工作台受访问控制保护</p>
     </form>
   </div>
 
-  <a class="skip" href="#main">跳到主内容</a>
-
+  <!-- 顶部控制台 -->
   <header class="topbar">
-    <div class="topbar-inner">
-      <div class="brand">
-        <!-- 与站点图标同一份几何：顶栏徽标、favicon、apple-touch-icon 三处共用一套图形，
-             避免出现「标签页上的图标和顶栏对不上」这种品牌漂移。
-             原先是四柱青绿（#4FD8E2/#7FE3E8），那是配色迁移到 Blurple 之前的遗留，
-             一并按设计系统换成 #5865F2。 -->
-        <svg class="brand-mark" width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
-          <rect width="32" height="32" rx="7.5" fill="#5865F2" />
+    <div class="topbar-left">
+      <div class="brand" title="点击重置并返回首页">
+        <svg class="brand-mark" width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="7" fill="#5865F2" />
           <rect x="7" y="10.5" width="4" height="11" rx="2" fill="#FFFFFF" />
           <rect x="14" y="6" width="4" height="20" rx="2" fill="#FFFFFF" />
           <rect x="21" y="9" width="4" height="14" rx="2" fill="#FFFFFF" />
         </svg>
         <span class="brand-name">Sleeve</span>
-        <!-- 版本徽标：占位符由服务端按 SLEEVE_VERSION 注入（src/app.py send_file），本地默认显示 vdev -->
         <span class="ver">v__VERSION__</span>
       </div>
-      <div class="run">
+      <div class="run-badge">
         <span class="dot dot-ok"></span>
         <span id="run-host">本地运行</span>
       </div>
     </div>
+
+    <div class="topbar-center">
+      <button id="btn-open-cmd" type="button" class="cmd-trigger" title="打开快捷命令面板 (Ctrl+K)">
+        <span class="cmd-icon">🔍</span>
+        <span class="cmd-text">搜索操作、复制字段或跳转…</span>
+        <kbd class="cmd-kbd">Ctrl K</kbd>
+      </button>
+    </div>
+
+    <div class="topbar-right">
+      <button id="btn-companion-toggle" type="button" class="btn-top" title="切换分屏伴侣模式 (Alt+C)">
+        <span class="btn-icon">◨</span>
+        <span class="btn-label">分屏伴侣</span>
+      </button>
+      <button id="btn-mb-seed-top" type="button" class="btn-top btn-accent" title="将已装配资料以 POST 表单直接预填至 MusicBrainz">
+        <span class="btn-icon">⚡</span>
+        <span class="btn-label">一键填报 MB</span>
+      </button>
+      <a id="open-mb-add" class="btn-top" href="https://musicbrainz.org/release/add" target="_blank" rel="noreferrer" title="在 MusicBrainz 打开空白新建页">
+        <span>新建页 ↗</span>
+      </a>
+    </div>
   </header>
 
-  <main class="shell" id="main">
-    <!-- ===================== 首屏 ===================== -->
-    <section class="hero">
-      <div class="hero-copy">
-        <div class="pills">
-          <span class="pill-tag is-accent">SLEEVE WORKBENCH</span>
-          <span class="pill-tag">数字发行建库</span>
-        </div>
-        <h1>数字合辑建库助手</h1>
-        <p class="lede">粘贴专辑链接，自动整理 MusicBrainz 建库资料。</p>
-      </div>
-    </section>
+  <!-- 工作台主体三栏驾驶舱 -->
+  <main class="cockpit-layout" id="main">
 
-    <!-- ===================== 模块 01 · 粘贴链接 ===================== -->
-    <section class="query-wrap">
-      <div class="card query-card" id="m01">
-        <div class="card-head">
-          <span class="step">01</span>
-          <h2>粘贴链接</h2>
-          <span class="head-hint">每行一个链接 · 支持 35+ 平台站点</span>
+    <!-- ==================== 左侧栏：链接录入与数据源 ==================== -->
+    <aside class="cockpit-col cockpit-left" aria-label="数据录入与来源">
+      <div class="panel-section" id="m01">
+        <div class="section-header">
+          <span class="section-tag">01 · INGESTION</span>
+          <h3>来源链接</h3>
         </div>
 
-        <form id="lookup-form">
-          <div class="query-body">
-            <div class="query-col">
-              <div class="field-label-row">
-                <label class="field-label" for="source-urls">来源链接</label>
-                <div class="query-actions">
-                  <button id="btn-paste-clipboard" type="button" class="chip-btn" title="读取剪贴板并填入">粘贴剪贴板</button>
-                  <button id="btn-sample-urls" type="button" class="chip-btn" title="填入示例链接">填入示例</button>
-                  <button id="btn-clear-urls" type="button" class="chip-btn" title="清空输入框">清空</button>
-                </div>
-              </div>
-              <textarea id="source-urls" name="urls" rows="6" placeholder="https://music.apple.com/...&#10;https://open.spotify.com/album/...&#10;https://ototoy.jp/...&#10;https://mora.jp/package/..."></textarea>
-              <p class="field-hint">每行一个链接；支持 35+ 平台。可按 <b>Ctrl+Enter</b>（Mac <b>⌘+Enter</b>）快捷查询。</p>
-            </div>
+        <form id="lookup-form" class="lookup-form">
+          <div class="lookup-chip-row">
+            <button id="btn-paste-clipboard" type="button" class="chip-btn" title="读取剪贴板填入">粘贴剪贴板</button>
+            <button id="btn-sample-urls" type="button" class="chip-btn" title="填入示例专辑链接">填入示例</button>
+            <button id="btn-clear-urls" type="button" class="chip-btn" title="清空文本框">清空</button>
           </div>
 
-          <div class="card-foot">
-            <span id="status" class="status">等待输入</span>
-            <button class="primary" type="submit">查询</button>
+          <textarea id="source-urls" name="urls" rows="5" class="source-input" placeholder="粘贴专辑或单曲链接（支持 Apple Music, Spotify, Mora, Ototoy, Bandcamp 等 35+ 平台，每行一条）…"></textarea>
+
+          <div class="lookup-action-row">
+            <span id="status" class="status-indicator">等待输入</span>
+            <button id="btn-submit-query" type="submit" class="primary query-btn">
+              <span class="btn-query-text">开始查询</span>
+              <kbd class="btn-kbd">↵</kbd>
+            </button>
           </div>
 
+          <!-- 流光骨架屏占位 -->
           <div id="lookup-skeleton" class="skeleton-wrap hidden" aria-hidden="true">
             <div class="skeleton-bar skeleton-shimmer"></div>
-            <div class="skeleton-grid">
-              <div class="skeleton-card skeleton-shimmer"></div>
-              <div class="skeleton-card skeleton-shimmer"></div>
-              <div class="skeleton-card skeleton-shimmer"></div>
-            </div>
+            <div class="skeleton-card skeleton-shimmer"></div>
+            <div class="skeleton-card skeleton-shimmer"></div>
           </div>
         </form>
       </div>
-    </section>
 
-    <!-- ===================== 报告区 ===================== -->
-    <section id="results" class="results hidden">
-
-      <!-- 报告工具栏 -->
-      <!-- 吸顶遮罩：工具栏吸顶后，把「视口顶部 → 左栏吸顶线」整段用毛玻璃盖住。
-           与顶栏同款白雾玻璃（半透明 + backdrop-filter），不做纯色实底 —— 纯色会把
-           左上角那团紫色光斑整块切掉，看起来就是一条突兀的「黑边」。 -->
-      <div class="reportbar-shade" aria-hidden="true"></div>
-      <div class="reportbar">
-        <div class="report-info">
-          <div class="eyebrow">GENERATED DOSSIER</div>
-          <h2 id="report-title">建库资料</h2>
-          <p id="report-subtitle" class="muted"></p>
+      <!-- 数据源状态卡 -->
+      <div class="panel-section sources-section" id="m03">
+        <div class="section-header">
+          <span class="section-tag">SOURCES</span>
+          <h4>抓取来源</h4>
         </div>
-        <div class="report-actions">
-          <a id="open-mb-add" class="btn btn-accent" href="https://musicbrainz.org/release/add" target="_blank" rel="noreferrer" title="在 MusicBrainz 打开新建发行页面">MusicBrainz 新建 ↗</a>
-          <button id="copy-share" class="btn">复制分享链接</button>
-          <button id="copy-markdown" class="btn">复制 Markdown</button>
-          <button id="download-markdown" class="btn">下载 Markdown</button>
-          <button id="download-checklist" class="btn">下载核对清单</button>
-          <button id="download-xml" class="btn">下载 XML 工作单</button>
-          <button id="download-json" class="btn">下载 JSON</button>
+        <div id="sources" class="sources-list">
+          <div class="empty-hint">暂无已抓取的数据源。</div>
+        </div>
+        <div id="cover-sources" class="cover-sources-box"></div>
+      </div>
+
+      <!-- 置信度与查重 -->
+      <div class="panel-section confidence-section">
+        <div class="section-header">
+          <span class="section-tag">CONFIDENCE</span>
+          <h4>查重与置信度</h4>
+        </div>
+        <div id="duplicates-card" class="duplicates-box hidden">
+          <div id="duplicates" class="duplicates-list"></div>
+        </div>
+        <div id="release-groups" class="rg-box"></div>
+      </div>
+    </aside>
+
+    <!-- ==================== 中央主栏：MB 对齐装配中枢 ==================== -->
+    <section class="cockpit-col cockpit-center" aria-label="资料装配核心">
+
+      <!-- 空白引导态 -->
+      <div id="staging-empty" class="staging-empty">
+        <div class="empty-icon-ring">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M9 18V5l12-2v13"></path>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="16" r="3"></circle>
+          </svg>
+        </div>
+        <h2>准备就绪 · 粘贴链接开始建库</h2>
+        <p class="empty-desc">支持 Apple Music / Spotify / Mora / Ototoy / Bandcamp 等 35+ 平台。自动倒查品番、条码、厂牌与逐轨 ISRC。</p>
+        <div class="empty-shortcuts-grid">
+          <div class="shortcut-card">
+            <kbd>Ctrl + Enter</kbd>
+            <span>一键提交查询</span>
+          </div>
+          <div class="shortcut-card">
+            <kbd>Ctrl + K</kbd>
+            <span>唤出全局命令面板</span>
+          </div>
+          <div class="shortcut-card">
+            <kbd>Alt + C</kbd>
+            <span>开启并排分屏伴侣模式</span>
+          </div>
         </div>
       </div>
 
-      <div class="workspace">
-        <!-- 左导航：模块索引 -->
-        <nav class="rail" aria-label="报告模块导航">
-          <div class="rail-head">
-            <div class="eyebrow">REPORT INDEX</div>
-            <div class="rail-progress">
-              <span>建库完成度</span>
-              <b id="rail-progress-value">—</b>
+      <!-- 报告区（专辑模式） -->
+      <div id="results" class="results-cockpit hidden">
+
+        <!-- 资料头横幅 -->
+        <div class="dossier-hero">
+          <div id="cover-panel" class="dossier-cover"></div>
+          <div class="dossier-meta">
+            <div class="dossier-badge-row">
+              <span class="pill-accent">RELEASE DOSSIER</span>
+              <span id="rail-progress-value" class="pill-track">完成度 —</span>
             </div>
-            <div class="rail-track"><i id="rail-progress-bar"></i></div>
+            <h2 id="report-title" class="dossier-title">建库资料</h2>
+            <p id="report-subtitle" class="dossier-sub"></p>
+            <div class="dossier-actions">
+              <button id="btn-mb-seed-main" type="button" class="btn btn-accent" title="一键将整套元数据预填到 MusicBrainz">
+                ⚡ 一键填报 MusicBrainz
+              </button>
+              <button id="copy-share" class="btn" type="button">复制分享链接</button>
+              <button id="copy-markdown" class="btn" type="button">复制 Markdown</button>
+            </div>
           </div>
+        </div>
 
-          <ul class="rail-list" id="rail-list">
-            <li><a href="#m01"><span class="rn">01</span>粘贴链接</a></li>
-            <li><a href="#m02"><span class="rn">02</span>发行字段</a></li>
-            <li><a href="#m03"><span class="rn">03</span>封面与来源</a></li>
-            <li><a href="#m04"><span class="rn">04</span>发行地区</a></li>
-            <li><a href="#m05"><span class="rn">05</span>Annotation</a></li>
-            <li><a href="#m06"><span class="rn">06</span>艺人解析</a></li>
-            <li><a href="#m07"><span class="rn">07</span>来源对比</a></li>
-            <li><a href="#m08"><span class="rn">08</span>External links</a></li>
-            <li><a href="#m09"><span class="rn">09</span>曲目表</a></li>
-            <li><a href="#m10"><span class="rn">10</span>提交前核对</a></li>
-            <li><a href="#m11"><span class="rn">11</span>Edit note</a></li>
-            <li><a href="#m12"><span class="rn">12</span>查询诊断</a></li>
-          </ul>
-
-          <div class="rail-risk hidden" id="rail-risk">
-            <h3 id="rail-risk-title">待确认项</h3>
-            <div id="rail-risk-list"></div>
-          </div>
+        <!-- MusicBrainz 对齐工作流 Tab 导航 (#1-019) -->
+        <nav class="staging-tabs-nav" role="tablist">
+          <span class="stage-indicator" aria-hidden="true"></span>
+          <button type="button" class="stage-tab active" data-stage="info">
+            <span class="tab-num">01</span> 基础字段
+          </button>
+          <button type="button" class="stage-tab" data-stage="tracks">
+            <span class="tab-num">02</span> 曲目与 ISRC
+          </button>
+          <button type="button" class="stage-tab" data-stage="links">
+            <span class="tab-num">03</span> 外部链接
+          </button>
+          <button type="button" class="stage-tab" data-stage="audit">
+            <span class="tab-num">04</span> Edit Note 与核验
+          </button>
         </nav>
 
-        <!-- 主工作区 -->
-        <div class="main-col">
+        <!-- Stage 01: 基础字段 -->
+        <div id="stage-pane-info" class="stage-pane">
+          <div id="missing-fields" class="missing-banner-wrap"></div>
 
-          <!-- 查重提醒（有同条码发行时才出现） -->
-          <section id="duplicates-card" class="card is-alert hidden">
+          <div class="card" id="m02">
             <div class="card-head">
-              <span class="step is-alert">!</span>
-              <h2>MusicBrainz 里已有同条码的发行</h2>
-              <span class="head-hint">先确认是不是同一张，不要重复建</span>
+              <span class="step-badge">Release Info</span>
+              <h3>核心发行字段</h3>
+              <span class="head-hint">点击任意条目即可单独复制</span>
             </div>
-            <div id="duplicates" class="duplicates"></div>
-          </section>
-
-          <!-- ===== 阶段 A · 发行主体 ===== -->
-          <div class="phase">
-            <div class="phase-head">
-              <span class="phase-num">A</span>
-              <div>
-                <h3>发行主体</h3>
-                <p>多处来源取值并排比对，冲突与缺失直接标在字段上。</p>
-              </div>
-            </div>
+            <div id="release-fields" class="fields-grid"></div>
           </div>
 
-          <div class="row">
-            <section class="card" id="m02">
+          <div class="card-row-2col">
+            <div class="card" id="m04">
               <div class="card-head">
-                <span class="step">02</span>
-                <h2>发行字段</h2>
-              </div>
-              <div id="missing-fields" class="missing-fields"></div>
-              <div id="release-fields" class="fields"></div>
-            </section>
-
-            <section class="card" id="m03">
-              <div class="card-head">
-                <span class="step">03</span>
-                <h2>封面与来源</h2>
-              </div>
-              <div id="cover-panel" class="cover-panel"></div>
-              <div id="cover-sources" class="cover-sources"></div>
-              <div id="sources" class="sources"></div>
-              <!-- 封面 Edit note 草稿：从 11「Edit note 草稿」搬来，贴着封面与来源一起看 -->
-              <div id="cover-note" class="notes cover-note"></div>
-            </section>
-          </div>
-
-          <div class="row">
-            <section class="card" id="m04">
-              <div class="card-head">
-                <span class="step">04</span>
-                <h2>发行地区</h2>
-                <div class="title-actions">
+                <span class="step-badge">Events</span>
+                <h4>发行地区与日期</h4>
+                <div class="head-actions">
                   <span id="event-count" class="pill"></span>
-                  <button id="copy-events" class="btn" type="button">复制国家列表</button>
+                  <button id="copy-events" class="btn btn-sm" type="button">复制地区</button>
                 </div>
               </div>
-              <div id="release-events" class="events"></div>
-            </section>
+              <div id="release-events" class="events-list"></div>
+            </div>
 
-            <section class="card" id="m05">
+            <div class="card" id="m05">
               <div class="card-head">
-                <span class="step">05</span>
-                <h2>Annotation 草稿</h2>
-                <div class="title-actions">
-                  <button id="copy-annotation" class="btn" type="button">复制 Annotation</button>
+                <span class="step-badge">Annotation</span>
+                <h4>Annotation 批注</h4>
+                <div class="head-actions">
+                  <button id="copy-annotation" class="btn btn-sm" type="button">复制 Annotation</button>
                 </div>
               </div>
-              <div id="annotation" class="annotation"></div>
-            </section>
-          </div>
-
-          <!-- ===== 阶段 B · 关联实体与来源校验 ===== -->
-          <div class="phase">
-            <div class="phase-head">
-              <span class="phase-num">B</span>
-              <div>
-                <h3>关联实体与来源校验</h3>
-                <p>避免重名艺人 / 重复发行组，来源冲突逐条判断采信谁。</p>
-              </div>
+              <div id="annotation" class="annotation-box"></div>
             </div>
           </div>
 
-          <section class="card" id="m06">
+          <div class="card" id="m06">
             <div class="card-head">
-              <span class="step">06</span>
-              <h2>艺人解析与发行组候选</h2>
+              <span class="step-badge">Credits</span>
+              <h4>艺人与制作解析</h4>
             </div>
-            <p class="sub-label">Artist credits · 先用已有 MBID，避免新建重名艺人</p>
-            <div id="artist-credits" class="artist-credits"></div>
-            <p class="sub-label">Release group 候选 · 命中就复用，不要新建</p>
-            <div id="release-groups" class="rg-candidates"></div>
-          </section>
-
-          <section class="card" id="m07">
-            <div class="card-head">
-              <span class="step">07</span>
-              <h2>来源对比</h2>
-              <span class="head-hint">自动标出一致、缺失和冲突</span>
-            </div>
-            <div id="source-comparison" class="comparison"></div>
-            <div id="catalog-candidates" class="catalog-candidates"></div>
-            <div id="lookup-links" class="lookup-links"></div>
-          </section>
-
-          <!-- ===== 阶段 C · 提交内容 ===== -->
-          <div class="phase">
-            <div class="phase-head">
-              <span class="phase-num">C</span>
-              <div>
-                <h3>提交内容</h3>
-                <p>这一段可以整块拿去用：External links 的关系类型照抄，曲目表按 Track Parser 格式粘贴。</p>
-              </div>
-            </div>
+            <div id="artist-credits" class="credits-box"></div>
           </div>
+        </div>
 
-          <section class="card" id="m08">
+        <!-- Stage 02: 曲目与 ISRC -->
+        <div id="stage-pane-tracks" class="stage-pane hidden">
+          <div class="card" id="m09">
             <div class="card-head">
-              <span class="step">08</span>
-              <h2>External links</h2>
-              <div class="title-actions">
-                <span id="external-count" class="pill"></span>
-                <button id="copy-external" class="btn" type="button">复制全部链接</button>
-              </div>
-            </div>
-            <div id="external-links" class="external"></div>
-          </section>
-
-          <section class="card" id="m09">
-            <div class="card-head">
-              <span class="step">09</span>
-              <h2>曲目表</h2>
-              <div class="title-actions">
+              <div class="head-title-group">
+                <span class="step-badge">Tracklist</span>
+                <h3>曲目表与录音 ISRC</h3>
                 <span id="track-count" class="pill"></span>
-                <button id="copy-tracklist" class="btn" type="button">复制 Track Parser</button>
-                <button id="copy-tracklist-artist" class="btn" type="button">复制（带艺人）</button>
-                <button id="download-tracklist" class="btn" type="button">下载 txt</button>
+              </div>
+              <div class="head-actions">
+                <button id="copy-tracklist" class="btn btn-accent btn-sm" type="button">复制 Track Parser</button>
+                <button id="copy-tracklist-artist" class="btn btn-sm" type="button">复制（带艺人）</button>
+                <button id="download-tracklist" class="btn btn-sm" type="button">下载 txt</button>
               </div>
             </div>
+
+            <!-- 曲目表现形式内嵌 Tab (#1-019) -->
             <div class="tracklist-tabs" role="tablist">
               <span class="tab-indicator" aria-hidden="true"></span>
-              <button type="button" class="tab-btn active" data-tab="table">曲目表格</button>
-              <button type="button" class="tab-btn" data-tab="parser">Track Parser 格式</button>
-              <button type="button" class="tab-btn" data-tab="artist">Track Parser（带艺人）</button>
+              <button type="button" class="tab-btn active" data-tab="table">曲目表格视图（可单拷 ISRC）</button>
+              <button type="button" class="tab-btn" data-tab="parser">Track Parser 纯文本</button>
+              <button type="button" class="tab-btn" data-tab="artist">Track Parser（带轨艺人）</button>
             </div>
+
             <div id="tab-pane-table" class="tracklist-pane">
               <div class="table-wrap">
-                <table>
+                <table class="tracks-table">
                   <thead>
-                    <tr><th>#</th><th>标题</th><th>Artist Credit / 艺人</th><th>时长</th><th>ISRC</th><th>Recording</th></tr>
+                    <tr>
+                      <th style="width: 50px;">#</th>
+                      <th>曲目标题</th>
+                      <th>Artist Credit / 艺人</th>
+                      <th style="width: 75px;">时长</th>
+                      <th style="width: 140px;">ISRC</th>
+                      <th style="width: 110px;">Recording</th>
+                    </tr>
                   </thead>
                   <tbody id="tracks"></tbody>
                 </table>
               </div>
             </div>
+
             <div id="tab-pane-parser" class="tracklist-pane hidden">
               <pre id="tracklist-parser" class="parser-preview"></pre>
             </div>
+
             <div id="tab-pane-artist" class="tracklist-pane hidden">
               <pre id="tracklist-parser-artist" class="parser-preview"></pre>
             </div>
-            <p class="hint">粘进 Track Parser：单艺人<b>取消勾选</b>「Lines contain track artists」；多碟按碟分别粘贴（<code>2-5</code> = 第 2 碟第 5 轨）。点击表格中 ISRC 即可单独复制。</p>
-          </section>
-
-          <!-- ===== 阶段 D · 交付前校验 ===== -->
-          <div class="phase">
-            <div class="phase-head">
-              <span class="phase-num">D</span>
-              <div>
-                <h3>交付前校验</h3>
-                <p>清单勾完、Edit note 写完后才提交。</p>
-              </div>
-            </div>
           </div>
+        </div>
 
-          <div class="row">
-            <section class="card" id="m10">
-              <div class="card-head">
-                <span class="step">10</span>
-                <h2>提交前核对</h2>
-                <div class="title-actions">
-                  <span id="review-count" class="pill is-alert"></span>
-                </div>
-              </div>
-              <div id="checklist" class="checklist"></div>
-            </section>
-
-            <section class="card" id="m11">
-              <div class="card-head">
-                <span class="step">11</span>
-                <h2>Edit note 草稿</h2>
-              </div>
-              <div id="edit-notes" class="notes"></div>
-            </section>
-
-            <section class="card" id="m11b">
-              <div class="card-head">
-                <span class="step">11b</span>
-                <h2>Work 关系与 Credits</h2>
-                <div class="title-actions">
-                  <span id="work-relations-count" class="pill"></span>
-                </div>
-              </div>
-              <div id="work-relations" class="work-relations"></div>
-              <div id="lyrics-candidates" class="lyrics-candidates"></div>
-            </section>
-          </div>
-
-          <section class="card" id="m12">
+        <!-- Stage 03: 外部链接 -->
+        <div id="stage-pane-links" class="stage-pane hidden">
+          <div class="card" id="m08">
             <div class="card-head">
-              <span class="step">12</span>
-              <h2>查询状态与 API 提醒</h2>
+              <span class="step-badge">Relationships</span>
+              <h3>MusicBrainz 外部链接关系</h3>
+              <div class="head-actions">
+                <span id="external-count" class="pill"></span>
+                <button id="copy-external" class="btn btn-sm" type="button">复制全部链接</button>
+              </div>
             </div>
-            <div id="diagnostics" class="diagnostics"></div>
-          </section>
+            <div id="external-links" class="external-box"></div>
+          </div>
+          <div id="lookup-links" class="lookup-links-box"></div>
+        </div>
 
+        <!-- Stage 04: Edit Note 与核验 -->
+        <div id="stage-pane-audit" class="stage-pane hidden">
+          <div class="card" id="m11">
+            <div class="card-head">
+              <span class="step-badge">Edit Note</span>
+              <h3>MusicBrainz Edit Note 草稿</h3>
+            </div>
+            <div id="edit-notes" class="edit-notes-box"></div>
+          </div>
+
+          <div class="card" id="m11b">
+            <div class="card-head">
+              <span class="step-badge">Works</span>
+              <h4>Work 关系与 Apple Credits</h4>
+              <span id="work-relations-count" class="pill"></span>
+            </div>
+            <div id="work-relations" class="work-relations-box"></div>
+            <div id="lyrics-candidates" class="lyrics-candidates-box"></div>
+          </div>
+
+          <div class="card" id="m12">
+            <div class="card-head">
+              <span class="step-badge">Diagnostics</span>
+              <h4>查询状态与诊断日志</h4>
+            </div>
+            <div id="diagnostics" class="diagnostics-box"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 报告区（单曲模式） -->
+      <div id="song-results" class="results-cockpit hidden" aria-label="单曲建库资料">
+        <div class="dossier-hero">
+          <div id="song-cover" class="dossier-cover"></div>
+          <div class="dossier-meta">
+            <span class="pill-accent">SONG DOSSIER</span>
+            <h2 id="song-report-title" class="dossier-title">单曲资料</h2>
+            <p id="song-report-subtitle" class="dossier-sub"></p>
+            <div class="dossier-actions">
+              <button id="copy-song-markdown" class="btn" type="button">复制 Markdown</button>
+              <button id="download-song-markdown" class="btn" type="button">下载 Markdown</button>
+              <button id="download-song-json" class="btn" type="button">下载 JSON</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="ms1">
+          <div class="card-head">
+            <span class="step-badge">Song Info</span>
+            <h3>单曲基本信息</h3>
+          </div>
+          <div id="song-fields" class="fields-grid"></div>
+        </div>
+
+        <div class="card" id="ms2">
+          <div class="card-head">
+            <span class="step-badge">Album</span>
+            <h3>所属专辑</h3>
+          </div>
+          <div id="song-album-card"></div>
+        </div>
+
+        <div class="card" id="ms3">
+          <div class="card-head">
+            <span class="step-badge">Apple Credits</span>
+            <h3>制作人员 Credits</h3>
+          </div>
+          <div id="song-credits"></div>
+        </div>
+
+        <div class="card" id="ms4">
+          <div class="card-head">
+            <span class="step-badge">Works</span>
+            <h3>Work 关系</h3>
+            <span id="song-work-count" class="pill"></span>
+          </div>
+          <div id="song-work-relations"></div>
+        </div>
+
+        <div class="card" id="ms5">
+          <div class="card-head">
+            <span class="step-badge">Lyrics</span>
+            <h3>歌词直达</h3>
+          </div>
+          <div id="song-lyrics-candidates"></div>
+        </div>
+
+        <div class="card" id="ms6">
+          <div class="card-head">
+            <span class="step-badge">Links</span>
+            <h3>外部链接</h3>
+            <span id="song-external-count" class="pill"></span>
+          </div>
+          <div id="song-external-links"></div>
+        </div>
+
+        <div class="card" id="ms7">
+          <div class="card-head">
+            <span class="step-badge">Checklist</span>
+            <h3>提交前核对</h3>
+            <span id="song-review-count" class="pill is-alert"></span>
+          </div>
+          <div id="song-checklist"></div>
+        </div>
+
+        <div class="card" id="ms8">
+          <div class="card-head">
+            <span class="step-badge">Edit Note</span>
+            <h3>Edit Note 草稿</h3>
+          </div>
+          <div id="song-edit-notes"></div>
+        </div>
+
+        <div class="card" id="ms9">
+          <div class="card-head">
+            <span class="step-badge">Diagnostics</span>
+            <h3>诊断提醒</h3>
+          </div>
+          <div id="song-diagnostics"></div>
         </div>
       </div>
+
     </section>
 
-    <!-- ===================== 单曲报告（song 链接） ===================== -->
-    <section id="song-results" class="results hidden" aria-label="单曲建库资料">
-
-      <div class="reportbar-shade" aria-hidden="true"></div>
-      <div class="reportbar">
-        <div class="report-info">
-          <div class="eyebrow">SONG DOSSIER</div>
-          <h2 id="song-report-title">单曲资料</h2>
-          <p id="song-report-subtitle" class="muted"></p>
+    <!-- ==================== 右侧栏：冲突决策与核验抽屉 ==================== -->
+    <aside class="cockpit-col cockpit-right" aria-label="决策与核对抽屉">
+      
+      <!-- 冲突决策池 -->
+      <div class="panel-section conflict-section" id="m07">
+        <div class="section-header">
+          <span class="section-tag">CONFLICT RESOLVER</span>
+          <h3>多源冲突决策</h3>
         </div>
-        <div class="report-actions">
-          <button id="copy-song-markdown" class="btn">复制 Markdown</button>
-          <button id="download-song-markdown" class="btn">下载 Markdown</button>
-          <button id="download-song-json" class="btn">下载 JSON</button>
+        <div id="conflict-resolver" class="conflict-pool">
+          <div class="clean-state-pill">✓ 各来源核心字段一致，无需仲裁</div>
+        </div>
+        <div id="source-comparison" class="comparison-raw hidden"></div>
+        <div id="catalog-candidates" class="candidates-box"></div>
+      </div>
+
+      <!-- 提交前核对清单 -->
+      <div class="panel-section checklist-section" id="m10">
+        <div class="section-header">
+          <span class="section-tag">AUDIT</span>
+          <h3>提交前核对清单</h3>
+          <span id="review-count" class="pill is-alert">0 项待核</span>
+        </div>
+        <div class="progress-track-wrap">
+          <div class="progress-bar-bg"><div id="rail-progress-bar" class="progress-bar-fill"></div></div>
+        </div>
+        <div id="checklist" class="checklist-items"></div>
+        <div id="rail-risk" class="risk-box hidden">
+          <div id="rail-risk-list"></div>
         </div>
       </div>
 
-      <div class="workspace">
-        <nav class="rail" aria-label="单曲报告导航">
-          <div class="rail-head">
-            <div class="eyebrow">SONG INDEX</div>
-          </div>
-          <ul class="rail-list" id="song-rail-list">
-            <li><a href="#ms1"><span class="rn">S1</span>歌曲信息</a></li>
-            <li><a href="#ms2"><span class="rn">S2</span>所属专辑</a></li>
-            <li><a href="#ms3"><span class="rn">S3</span>Apple Credits</a></li>
-            <li><a href="#ms4"><span class="rn">S4</span>Work 关系</a></li>
-            <li><a href="#ms5"><span class="rn">S5</span>歌词候选</a></li>
-            <li><a href="#ms6"><span class="rn">S6</span>外部链接</a></li>
-            <li><a href="#ms7"><span class="rn">S7</span>核对清单</a></li>
-            <li><a href="#ms8"><span class="rn">S8</span>Edit note</a></li>
-            <li><a href="#ms9"><span class="rn">S9</span>查询诊断</a></li>
-          </ul>
-        </nav>
-
-        <div class="main-col">
-
-          <section class="card" id="ms1">
-            <div class="card-head">
-              <span class="step">S1</span>
-              <h2>歌曲信息</h2>
-              <span class="head-hint">recording 建库先看这一栏</span>
-            </div>
-            <div id="song-cover" class="cover-panel"></div>
-            <div id="song-fields" class="fields"></div>
-          </section>
-
-          <section class="card" id="ms2">
-            <div class="card-head">
-              <span class="step">S2</span>
-              <h2>所属专辑</h2>
-              <span class="head-hint">需要建专辑资料时切到专辑报告</span>
-            </div>
-            <div id="song-album-card"></div>
-          </section>
-
-          <section class="card" id="ms3">
-            <div class="card-head">
-              <span class="step">S3</span>
-              <h2>Apple Music Credits</h2>
-              <span class="head-hint">版权方侧数据，MB 有没有都不影响</span>
-            </div>
-            <div id="song-credits" class="work-relations"></div>
-          </section>
-
-          <section class="card" id="ms4">
-            <div class="card-head">
-              <span class="step">S4</span>
-              <h2>Work 关系（MusicBrainz）</h2>
-              <div class="title-actions">
-                <span id="song-work-count" class="pill"></span>
-              </div>
-            </div>
-            <div id="song-work-relations" class="work-relations"></div>
-          </section>
-
-          <section class="card" id="ms5">
-            <div class="card-head">
-              <span class="step">S5</span>
-              <h2>Lyrics 候选</h2>
-              <span class="head-hint">MB 白名单站点歌词页直达</span>
-            </div>
-            <div id="song-lyrics-candidates" class="lyrics-candidates"></div>
-          </section>
-
-          <section class="card" id="ms6">
-            <div class="card-head">
-              <span class="step">S6</span>
-              <h2>外部链接</h2>
-              <div class="title-actions">
-                <span id="song-external-count" class="pill"></span>
-              </div>
-            </div>
-            <div id="song-external-links" class="external"></div>
-          </section>
-
-          <section class="card" id="ms7">
-            <div class="card-head">
-              <span class="step">S7</span>
-              <h2>提交前核对</h2>
-              <div class="title-actions">
-                <span id="song-review-count" class="pill is-alert"></span>
-              </div>
-            </div>
-            <div id="song-checklist" class="checklist"></div>
-          </section>
-
-          <section class="card" id="ms8">
-            <div class="card-head">
-              <span class="step">S8</span>
-              <h2>Edit note 草稿</h2>
-            </div>
-            <div id="song-edit-notes" class="notes"></div>
-          </section>
-
-          <section class="card" id="ms9">
-            <div class="card-head">
-              <span class="step">S9</span>
-              <h2>查询状态与 API 提醒</h2>
-            </div>
-            <div id="song-diagnostics" class="diagnostics"></div>
-          </section>
-
+      <!-- 快速导出箱 -->
+      <div class="panel-section export-section">
+        <div class="section-header">
+          <span class="section-tag">EXPORT</span>
+          <h4>导出与工作单</h4>
+        </div>
+        <div class="export-btn-grid">
+          <button id="download-checklist" class="btn btn-sm" type="button">下载核对清单 .md</button>
+          <button id="download-markdown" class="btn btn-sm" type="button">下载完整资料 .md</button>
+          <button id="download-xml" class="btn btn-sm" type="button">下载 XML 工作单</button>
+          <button id="download-json" class="btn btn-sm" type="button">下载 JSON 结构</button>
         </div>
       </div>
-    </section>
+
+      <div id="cover-note" class="notes cover-note-box hidden"></div>
+      <!-- 隐藏兼容锚点（兼容旧脚本查询） -->
+      <div id="rail-list" class="hidden"></div>
+      <div id="rail-risk-title" class="hidden"></div>
+    </aside>
+
   </main>
 
-  <!-- 返回顶部：滚动超过一屏出现，点击平滑回顶 -->
-  <button id="to-top" class="to-top" type="button" aria-label="返回顶部" title="返回顶部">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 19V5M5 12l7-7 7 7" />
-    </svg>
-  </button>
+  <!-- 快捷命令面板 (Cmd+K / Ctrl+K) -->
+  <div id="cmd-palette" class="cmd-palette-backdrop hidden" aria-modal="true" role="dialog">
+    <div class="cmd-palette-modal">
+      <div class="cmd-search-row">
+        <span class="cmd-search-icon">🔍</span>
+        <input id="cmd-input" type="text" placeholder="输入命令、动作或字段名称…" autocomplete="off" spellcheck="false" />
+        <kbd class="cmd-kbd-esc">ESC</kbd>
+      </div>
+      <div class="cmd-list" id="cmd-list">
+        <div class="cmd-group-title">快捷动作</div>
+        <div class="cmd-item" data-action="mb-seed">
+          <span class="cmd-item-icon">⚡</span>
+          <span class="cmd-item-title">在 MusicBrainz 中一键预填建库</span>
+          <span class="cmd-item-hint">POST Seeding</span>
+        </div>
+        <div class="cmd-item" data-action="copy-tracklist">
+          <span class="cmd-item-icon">📋</span>
+          <span class="cmd-item-title">复制 Track Parser 纯文本</span>
+          <span class="cmd-item-hint">曲目表</span>
+        </div>
+        <div class="cmd-item" data-action="copy-tracklist-artist">
+          <span class="cmd-item-icon">📋</span>
+          <span class="cmd-item-title">复制 Track Parser（带艺人）</span>
+          <span class="cmd-item-hint">曲目表</span>
+        </div>
+        <div class="cmd-item" data-action="copy-editnote">
+          <span class="cmd-item-icon">📝</span>
+          <span class="cmd-item-title">复制 Edit Note 草稿</span>
+          <span class="cmd-item-hint">备注</span>
+        </div>
+        <div class="cmd-item" data-action="copy-markdown">
+          <span class="cmd-item-icon">📄</span>
+          <span class="cmd-item-title">复制完整 Markdown 报告</span>
+          <span class="cmd-item-hint">全部</span>
+        </div>
+        <div class="cmd-item" data-action="toggle-companion">
+          <span class="cmd-item-icon">◨</span>
+          <span class="cmd-item-title">切换分屏伴侣模式</span>
+          <span class="cmd-item-hint">Alt+C</span>
+        </div>
+        <div class="cmd-item" data-action="fill-sample">
+          <span class="cmd-item-icon">📥</span>
+          <span class="cmd-item-title">填入示例链接</span>
+          <span class="cmd-item-hint">试用</span>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  <!-- 数据源用量小徽标（右下角）：Soundcharts 配额余量，配置后才显示 -->
-  <div id="usage-badge" class="usage-badge hidden" aria-live="polite"></div>
+  <!-- MusicBrainz POST Seeder 容器（动态构造表单自动提交） -->
+  <div id="mb-seeder-container" class="hidden" aria-hidden="true"></div>
 
-  <!-- 全局轻量 Toast -->
+  <!-- 全局轻量 Toast 提示 (#1-018) -->
   <div id="toast" class="toast hidden" aria-live="polite">
     <div class="toast-content">
       <span class="toast-icon" aria-hidden="true">✓</span>
@@ -577,6 +584,10 @@
     <div class="toast-progress"><span class="toast-progress-bar"></span></div>
   </div>
 
+  <!-- 数据源配额微徽标 -->
+  <div id="usage-badge" class="usage-badge hidden" aria-live="polite"></div>
+
+  <!-- 页面脚本 -->
   <script src="/app.js?v=__VERSION__"></script>
 </body>
 </html>
