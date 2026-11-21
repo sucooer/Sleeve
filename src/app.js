@@ -567,7 +567,7 @@ function renderReport(report) {
     ["Packaging", report.release.packaging], ["Format", report.release.format], ["Release MBID", report.release.musicbrainz_release_mbid]
   ];
   const missing = report.missing_fields || [];
-  $("#missing-fields").innerHTML = missing.length ? `<div class="missing-banner"><strong>还需人工补齐 ${missing.length} 项</strong>${missing.map((item) => `<div class="missing-item"><span class="missing-name">${escapeHtml(item.field)}</span><span>${escapeHtml(item.hint)}</span></div>`).join("")}</div>` : "";
+  $("#missing-fields").innerHTML = missing.length ? `<div class="missing-banner"><div class="missing-banner-title"><span>⚠️ 还需人工补齐 ${missing.length} 项</span></div><div class="missing-list">${missing.map((item) => `<div class="missing-item"><span class="missing-name">${escapeHtml(item.field)}</span><span class="missing-desc">${escapeHtml(item.hint)}</span></div>`).join("")}</div></div>` : "";
 
   const warnFields = new Set();
   if (!report.release.barcode) warnFields.add("Barcode");
@@ -665,7 +665,33 @@ function renderReport(report) {
   if (m11b) m11b.classList.add("hidden");
   const lyricsCandidates = report.lyrics_candidates || [];
   $("#lyrics-candidates").innerHTML = lyricsCandidates.length ? renderLyricsCandidates(lyricsCandidates) : "";
-  $("#diagnostics").innerHTML = [...report.confidence.notes.map((note) => `<div class="diagnostic">${escapeHtml(note)}</div>`), ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`), ...report.source_errors.map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`), ...report.api_notes.map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`)].join("");
+  const linkify = (text) => escapeHtml(text).replace(/(https?:\/\/[^\s，。、<]+)/g, '<a href="$1" target="_blank" rel="noreferrer">$1</a>');
+  const diagItems = [];
+  (report.source_errors || []).forEach((item) => {
+    diagItems.push(`<div class="diag-item is-error">
+      <span class="diag-tag error">${escapeHtml(item.source || "错误")}</span>
+      <div class="diag-content">${linkify(item.error)}</div>
+    </div>`);
+  });
+  (report.source_warnings || []).forEach((item) => {
+    diagItems.push(`<div class="diag-item is-warning">
+      <span class="diag-tag warning">${escapeHtml(item.source || "提示")}</span>
+      <div class="diag-content">${linkify(item.warning)}</div>
+    </div>`);
+  });
+  (report.confidence.notes || []).forEach((note) => {
+    diagItems.push(`<div class="diag-item is-info">
+      <span class="diag-tag info">核验</span>
+      <div class="diag-content">${linkify(note)}</div>
+    </div>`);
+  });
+  (report.api_notes || []).forEach((note) => {
+    diagItems.push(`<div class="diag-item is-system">
+      <span class="diag-tag system">系统</span>
+      <div class="diag-content">${linkify(note)}</div>
+    </div>`);
+  });
+  $("#diagnostics").innerHTML = diagItems.join("") || `<div class="empty">无诊断日志。</div>`;
   // 待勾计数与进度条由 renderChecklist → syncChecklistProgress 统一维护
   // （原来这里直接写死 `${manual_review.length} 项待勾`，勾选后永远不变）
   // 完成度分母由**实际渲染的字段**推导（发行字段 + 来源对比字段），不再写死 21：
@@ -757,12 +783,26 @@ function renderSongReport(report) {
   $("#song-edit-notes").innerHTML = Object.entries(notes).map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
 
   // S9 诊断
-  const diagnostics = [
-    ...(report.source_warnings || []).map((item) => `<div class="diagnostic warning">${escapeHtml(item.source)}：${escapeHtml(item.warning)}</div>`),
-    ...(report.source_errors || []).map((item) => `<div class="diagnostic error">${escapeHtml(item.source)}：${escapeHtml(item.error)}</div>`),
-    ...(report.api_notes || []).map((note) => `<div class="diagnostic ok">${escapeHtml(note)}</div>`),
-  ];
-  $("#song-diagnostics").innerHTML = diagnostics.join("") || `<div class="empty">没有诊断信息。</div>`;
+  const songDiagItems = [];
+  (report.source_errors || []).forEach((item) => {
+    songDiagItems.push(`<div class="diag-item is-error">
+      <span class="diag-tag error">${escapeHtml(item.source || "错误")}</span>
+      <div class="diag-content">${linkify(item.error)}</div>
+    </div>`);
+  });
+  (report.source_warnings || []).forEach((item) => {
+    songDiagItems.push(`<div class="diag-item is-warning">
+      <span class="diag-tag warning">${escapeHtml(item.source || "提示")}</span>
+      <div class="diag-content">${linkify(item.warning)}</div>
+    </div>`);
+  });
+  (report.api_notes || []).forEach((note) => {
+    songDiagItems.push(`<div class="diag-item is-system">
+      <span class="diag-tag system">系统</span>
+      <div class="diag-content">${linkify(note)}</div>
+    </div>`);
+  });
+  $("#song-diagnostics").innerHTML = songDiagItems.join("") || `<div class="empty">没有诊断信息。</div>`;
 
   syncBarOffset();
   window.scrollTo({ top: box.offsetTop - 20, behavior: "smooth" });

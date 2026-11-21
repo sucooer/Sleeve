@@ -82,17 +82,10 @@
     </div>
 
     <div class="topbar-right">
-      <button id="btn-companion-toggle" type="button" class="btn-top" title="切换分屏伴侣模式 (Alt+C)">
-        <span class="btn-icon">◨</span>
-        <span class="btn-label">分屏伴侣</span>
-      </button>
       <button id="btn-mb-seed-top" type="button" class="btn-top btn-accent" title="将已装配资料以 POST 表单直接预填至 MusicBrainz">
         <span class="btn-icon">⚡</span>
         <span class="btn-label">一键填报 MB</span>
       </button>
-      <a id="open-mb-add" class="btn-top" href="https://musicbrainz.org/release/add" target="_blank" rel="noreferrer" title="在 MusicBrainz 打开空白新建页">
-        <span>新建页 ↗</span>
-      </a>
     </div>
   </header>
 
@@ -119,7 +112,7 @@
           <div class="lookup-action-row">
             <span id="status" class="status-indicator">等待输入</span>
             <button id="btn-submit-query" type="submit" class="primary query-btn">
-              <span class="btn-query-text">开始查询</span>
+              <span class="btn-query-text">查询</span>
               <kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
@@ -174,8 +167,8 @@
             <span>唤出全局命令面板</span>
           </div>
           <div class="shortcut-card">
-            <kbd>Alt + C</kbd>
-            <span>开启并排分屏伴侣模式</span>
+            <kbd>⚡</kbd>
+            <span>一键填报预填 MusicBrainz</span>
           </div>
         </div>
       </div>
@@ -549,10 +542,10 @@
           <span class="cmd-item-title">复制完整 Markdown 报告</span>
           <span class="cmd-item-hint">全部</span>
         </div>
-        <div class="cmd-item" data-action="toggle-companion">
-          <span class="cmd-item-icon">◨</span>
-          <span class="cmd-item-title">切换分屏伴侣模式</span>
-          <span class="cmd-item-hint">Alt+C</span>
+        <div class="cmd-item" data-action="mb-seed">
+          <span class="cmd-item-icon">⚡</span>
+          <span class="cmd-item-title">一键填报至 MusicBrainz</span>
+          <span class="cmd-item-hint">灌单</span>
         </div>
         <div class="cmd-item" data-action="fill-sample">
           <span class="cmd-item-icon">📥</span>
