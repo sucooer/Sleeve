@@ -194,6 +194,117 @@ function triggerStaggerEntrance(container) {
   container.classList.add("is-revealing");
 }
 
+// ---------- MusicBrainz 匹配与查重雷达 ----------
+function renderMbRadar(report) {
+  const radarBody = $("#mb-radar-content");
+  const radarPill = $("#mb-radar-pill");
+  const confLevel = $("#confidence-level");
+  const confNotes = $("#confidence-notes");
+  if (!radarBody) return;
+
+  const duplicates = report.duplicates || [];
+  const rgCandidates = report.release_group_candidates || [];
+  const rgHit = (report.release || {}).musicbrainz_release_group_mbid || "";
+
+  // 置信度
+  const conf = report.confidence || { overall: "medium", notes: [] };
+  if (confLevel) {
+    const levelMap = { high: "高 (High)", medium: "中 (Medium)", low: "低 (Low)" };
+    const classMap = { high: "is-success", medium: "is-warning", low: "is-alert" };
+    confLevel.textContent = levelMap[conf.overall] || conf.overall;
+    confLevel.className = `pill ${classMap[conf.overall] || ""}`;
+  }
+  if (confNotes) {
+    confNotes.innerHTML = (conf.notes || []).map((n) => `<div class="conf-note-item">· ${escapeHtml(n)}</div>`).join("");
+  }
+
+  // 状态 Pill
+  if (radarPill) {
+    if (duplicates.length) {
+      radarPill.textContent = `${duplicates.length} 条已有发行`;
+      radarPill.className = "pill is-alert";
+    } else if (rgHit || rgCandidates.length) {
+      radarPill.textContent = "匹配到已有 RG";
+      radarPill.className = "pill is-accent";
+    } else {
+      radarPill.textContent = "安全 · 查无重复";
+      radarPill.className = "pill is-success";
+    }
+  }
+
+  const blocks = [];
+
+  // 1. 已有 Release 查重告警
+  if (duplicates.length) {
+    blocks.push(`<div class="radar-card is-dup">
+      <div class="radar-card-head">
+        <span class="radar-badge is-alert">⚠️ MusicBrainz 已有对应发行 (Release)</span>
+        <span class="radar-subtag">请优先复用，避免重复创建</span>
+      </div>
+      ${duplicates.map((dup) => `
+        <div class="radar-dup-item">
+          <div class="radar-dup-main">
+            <a href="${escapeHtml(safeHref(dup.url))}" target="_blank" class="radar-dup-title"><strong>${escapeHtml(display(dup.title))}</strong> ↗</a>
+            <span class="muted">${escapeHtml(display(dup.artist))} · ${escapeHtml(display(dup.date))} · ${escapeHtml(dup.country || "地区未确认")} · ${escapeHtml(dup.track_count || "?")} 轨</span>
+          </div>
+          <div class="radar-dup-meta">
+            <span>MBID: <code>${escapeHtml((dup.release_mbid || "").slice(0, 13))}…</code></span>
+            ${dup.barcode ? `<span>条码: <strong>${escapeHtml(dup.barcode)}</strong></span>` : `<span class="muted">条码未录入</span>`}
+            <span class="badge-sm">${escapeHtml(dup.match_reason || "匹配")}</span>
+          </div>
+          <div class="radar-dup-actions">
+            ${dup.barcode ? `<button class="btn btn-sm btn-accent use-catalog" data-value="${escapeHtml(dup.barcode)}" type="button">采用此条码 (${escapeHtml(dup.barcode)})</button>` : ""}
+            <a href="${escapeHtml(safeHref(dup.url))}" target="_blank" class="btn btn-sm btn-ghost">在 MB 打开编辑 ↗</a>
+          </div>
+        </div>
+      `).join("")}
+    </div>`);
+  }
+
+  // 2. 匹配到的 Release Group
+  if (rgHit) {
+    blocks.push(`<div class="radar-card is-rg-hit">
+      <div class="radar-card-head">
+        <span class="radar-badge is-accent">🎯 已关联已有发行组 (Release Group)</span>
+        <span class="radar-subtag">直接复用</span>
+      </div>
+      <div class="radar-dup-item">
+        <a href="https://musicbrainz.org/release-group/${escapeHtml(rgHit)}" target="_blank" class="radar-rg-title"><code>${escapeHtml(rgHit)}</code> ↗</a>
+        <p class="muted">本张发行已与该发行组关联，提交时直接挂载，无需新建 Release Group。</p>
+      </div>
+    </div>`);
+  } else if (rgCandidates.length) {
+    blocks.push(`<div class="radar-card is-rg-cand">
+      <div class="radar-card-head">
+        <span class="radar-badge is-accent">🎯 匹配到相近已有发行组 (${rgCandidates.length})</span>
+        <span class="radar-subtag">优先复用，避开重复 RG</span>
+      </div>
+      <div class="radar-rg-list">
+        ${rgCandidates.map((rg) => `
+          <div class="radar-rg-item">
+            <div class="radar-rg-top">
+              <span class="radar-rg-title"><strong>${escapeHtml(rg.title)}</strong></span>
+              <span class="badge-sm">${escapeHtml(rg.primary_type || "Type")}</span>
+              <span class="radar-score">${escapeHtml(rg.score)}% 匹配</span>
+            </div>
+            <div class="radar-rg-sub muted">${escapeHtml(rg.artist || "")} · ${escapeHtml(rg.release_count)} 个已有发行</div>
+            <div class="radar-rg-actions">
+              <button class="btn btn-sm btn-accent copy-rg-mbid" data-mbid="${escapeHtml(rg.mbid)}" data-title="${escapeHtml(rg.title)}" type="button">复制 RG MBID (复用)</button>
+              <a href="${escapeHtml(safeHref(rg.url))}" target="_blank" class="btn btn-sm btn-ghost">在 MB 查看 ↗</a>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>`);
+  }
+
+  if (!duplicates.length && !rgHit && !rgCandidates.length) {
+    blocks.push(`<div class="clean-state-pill">✓ MusicBrainz 查无同名发行或发行组，可放心新建</div>`);
+  }
+
+  radarBody.innerHTML = blocks.join("");
+}
+
 // ---------- 冲突决策池渲染 ----------
 function renderConflictResolver(report) {
   const container = $("#conflict-resolver");
@@ -252,6 +363,7 @@ function seedToMusicBrainz(report) {
   if (r.script) addField("script", r.script);
   if (r.barcode) addField("barcode", r.barcode);
   if (r.country) addField("country", r.country);
+  if (r.musicbrainz_release_group_mbid) addField("release_group", r.musicbrainz_release_group_mbid);
 
   if (r.date) {
     const parts = r.date.split("-");
@@ -560,6 +672,7 @@ function renderReport(report) {
   // 后端加字段时写死的分母会静默失真，进度条永远是错的
   renderRail(report, fields.length + (report.source_comparison || []).length);
   renderConflictResolver(report);
+  renderMbRadar(report);
   initStageTabs();
   const resultsBox = $("#results");
   triggerStaggerEntrance(resultsBox);
@@ -1142,6 +1255,23 @@ document.addEventListener("click", (event) => {
   if (useCatalog) {
     manualCatalogValue = useCatalog.dataset.value || "";
     runLookup();
+    return;
+  }
+  const copyRg = event.target.closest(".copy-rg-mbid");
+  if (copyRg) {
+    const mbid = copyRg.dataset.mbid || "";
+    const title = copyRg.dataset.title || "";
+    if (mbid) {
+      if (currentReport && currentReport.release) {
+        currentReport.release.musicbrainz_release_group_mbid = mbid;
+        if (title) currentReport.release.release_group = title;
+        renderMbRadar(currentReport);
+      }
+      navigator.clipboard.writeText(mbid).then(() => {
+        showToast(`✓ 已绑定并复制发行组 MBID: ${mbid}`);
+      });
+    }
+    return;
   }
 });
 
@@ -1331,7 +1461,8 @@ $("#copy-markdown").addEventListener("click", async () => {
   await copyText(reportMarkdown(currentReport), $("#copy-markdown"), "复制 Markdown");
 });
 $("#download-markdown").addEventListener("click", () => currentReport && download(`${currentReport.release.title || "musicbrainz-report"}.md`, reportMarkdown(currentReport), "text/markdown;charset=utf-8"));
-$("#download-checklist").addEventListener("click", () => currentReport && download(`${currentReport.release.title || "musicbrainz-checklist"}-checklist.md`, checklistMarkdown(currentReport), "text/markdown;charset=utf-8"));
+const dlChecklist = $("#download-checklist");
+if (dlChecklist) dlChecklist.addEventListener("click", () => currentReport && download(`${currentReport.release.title || "musicbrainz-checklist"}-checklist.md`, checklistMarkdown(currentReport), "text/markdown;charset=utf-8"));
 $("#download-xml").addEventListener("click", () => currentReport && download(`${currentReport.release.title || "musicbrainz-workbook"}.xml`, reportXml(currentReport), "application/xml;charset=utf-8"));
 $("#download-json").addEventListener("click", () => currentReport && download(`${currentReport.release.title || "musicbrainz-report"}.json`, JSON.stringify(currentReport, null, 2), "application/json;charset=utf-8"));
 

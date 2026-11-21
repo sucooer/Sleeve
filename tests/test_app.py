@@ -1653,3 +1653,56 @@ def test_album_link_skips_credits_when_i_belongs_to_another_album(monkeypatch):
     assert report["work_relations"]["apple_credits"] == []
     warnings = " ".join(item.get("warning", "") for item in report["source_warnings"])
     assert "不一致" in warnings and "6814997402" in warnings, warnings
+
+
+def test_mb_release_group_candidates_with_extra_titles(monkeypatch):
+    """当罗马字标题查询不到时，应支持通过 extra_titles 查到日文汉字等候选 RG。"""
+    def fake_mb(path, params):
+        if path == "release-group":
+            query = params.get("query", "")
+            if "Yakusoku" in query:
+                return {"release-groups": []}
+            if "約束" in query:
+                return {
+                    "release-groups": [{
+                        "id": "96ecf4aa-6f58-47ab-bfe1-e2f2bef572e8",
+                        "title": "約束",
+                        "primary-type": "Single",
+                        "artist-credit": [{"name": "高嶺のなでしこ"}],
+                        "score": 100,
+                        "count": 1,
+                    }]
+                }
+        return {}
+
+    patch_seam(monkeypatch, "mb_request", fake_mb)
+    results = app.mb_release_group_candidates("Yakusoku - Single", "高嶺のなでしこ", extra_titles=["約束"])
+    assert len(results) == 1
+    assert results[0]["mbid"] == "96ecf4aa-6f58-47ab-bfe1-e2f2bef572e8"
+    assert results[0]["title"] == "約束"
+
+
+def test_mb_duplicate_releases_by_release_group(monkeypatch):
+    """即使没有条码，也能通过命中的 Release Group 反查出已存在的 Release。"""
+    def fake_mb(path, params):
+        if path == "release" and params.get("release-group") == "96ecf4aa-6f58-47ab-bfe1-e2f2bef572e8":
+            return {
+                "releases": [{
+                    "id": "073cf863-a06e-47b0-814c-2fd88e05d40e",
+                    "title": "約束",
+                    "artist-credit": [{"name": "高嶺のなでしこ"}],
+                    "date": "2026-10-28",
+                    "country": "XW",
+                    "barcode": "4580815800430",
+                    "track-count": 1,
+                    "release-group": {"id": "96ecf4aa-6f58-47ab-bfe1-e2f2bef572e8"},
+                }]
+            }
+        return {}
+
+    patch_seam(monkeypatch, "mb_request", fake_mb)
+    dups = app.mb_duplicate_releases(barcode="", release_group_ids=["96ecf4aa-6f58-47ab-bfe1-e2f2bef572e8"])
+    assert len(dups) == 1
+    assert dups[0]["release_mbid"] == "073cf863-a06e-47b0-814c-2fd88e05d40e"
+    assert dups[0]["barcode"] == "4580815800430"
+

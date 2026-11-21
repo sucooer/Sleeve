@@ -319,32 +319,86 @@ def mb_release_sites(release_id: str) -> list[str]:
     return sorted(sites)
 
 
-def mb_duplicate_releases(barcode: str, known_release_id: str = "", max_candidates: int = 2) -> list[dict[str, Any]]:
-    """按条码在 MusicBrainz 里找已存在的发行：命中就说明这张已经被建过，别重复建。"""
-    code = re.sub(r"\D", "", first(barcode))
-    if len(code) < 12:
-        return []
-    try:
-        found = mb_request("release", {"query": f"barcode:{code}", "limit": str(max_candidates + 1), "fmt": "json"})
-    except FetchError:
-        return []
+def mb_duplicate_releases(
+    barcode: str = "",
+    known_release_id: str = "",
+    max_candidates: int = 4,
+    release_group_ids: list[str] | None = None,
+    title: str = "",
+    artist: str = "",
+    extra_titles: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """在 MusicBrainz 里找已存在的发行：命中就说明已经被建过，别重复建。
+
+    查找顺序：
+      1. 条码精确检索（最准，只要有条码且有效就先查它）；
+      2. 关联 Release Group 遍历检索（如果已找到 RG 候选，查 RG 下的所有 release）；
+      3. 标题 + 艺人模糊检索（无条码且无 RG 候选时的兜底）。
+    """
     duplicates: list[dict[str, Any]] = []
-    for item in (found.get("releases") or [])[:max_candidates]:
+    seen_ids: set[str] = {known_release_id} if known_release_id else set()
+
+    def add_item(item: dict[str, Any], match_reason: str) -> None:
         release_id = first(item.get("id"))
-        if not release_id or release_id == known_release_id:
-            continue
+        if not release_id or release_id in seen_ids:
+            return
+        seen_ids.add(release_id)
         duplicates.append({
             "release_mbid": release_id,
             "title": clean_value(item.get("title")),
             "artist": mb_search_artist(item),
             "date": iso_date(item.get("date")),
             "country": first(item.get("country")),
+            "barcode": clean_value(item.get("barcode")),
             "track_count": item.get("track-count") or 0,
             "release_group_mbid": first((item.get("release-group") or {}).get("id")),
+            "match_reason": match_reason,
             "linked_sites": mb_release_sites(release_id),
             "url": f"https://musicbrainz.org/release/{release_id}",
         })
-    return duplicates
+
+    # 1. 优先按条码检索
+    code = re.sub(r"\D", "", first(barcode))
+    if len(code) >= 12:
+        try:
+            found = mb_request("release", {"query": f"barcode:{code}", "limit": str(max_candidates + 1), "fmt": "json"})
+            for item in found.get("releases") or []:
+                add_item(item, f"同条码 ({code})")
+        except FetchError:
+            pass
+
+    # 2. 若未命中条码，或者输入没有条码，但给定了 Release Group MBID 列表
+    if len(duplicates) < max_candidates and release_group_ids:
+        for rg_id in release_group_ids[:2]:
+            if not rg_id:
+                continue
+            try:
+                rg_releases = mb_request("release", {"release-group": rg_id, "limit": str(max_candidates + 1), "fmt": "json"})
+                for item in rg_releases.get("releases") or []:
+                    add_item(item, f"同发行组 ({rg_id[:8]}...)")
+            except FetchError:
+                continue
+
+    # 3. 如果依然没有结果，且提供了 title + artist，则按 release 检索
+    if not duplicates and (title or extra_titles) and artist:
+        candidate_titles: list[str] = []
+        for cand in [title, *(extra_titles or [])]:
+            c = TITLE_SUFFIX_RE.sub("", first(cand)).strip() or first(cand)
+            if c and c not in candidate_titles:
+                candidate_titles.append(c)
+        for cand_title in candidate_titles[:2]:
+            query = f'release:"{mb_query_escape(cand_title)}" AND artist:"{mb_query_escape(artist)}"'
+            try:
+                found = mb_request("release", {"query": query, "limit": str(max_candidates + 1), "fmt": "json"})
+                for item in found.get("releases") or []:
+                    if any(title_is_related(item.get("title"), c) for c in candidate_titles):
+                        add_item(item, "同名专辑与艺人")
+            except FetchError:
+                continue
+            if duplicates:
+                break
+
+    return duplicates[:max_candidates]
 
 
 def mb_query_escape(value: Any) -> str:
@@ -361,32 +415,58 @@ def mb_query_escape(value: Any) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def mb_release_group_candidates(title: str, artist: str = "", limit: int = 8) -> list[dict[str, Any]]:
-    """新建发行组之前先查有没有现成的，避开重复 RG。"""
+def mb_release_group_candidates(
+    title: str,
+    artist: str = "",
+    limit: int = 8,
+    extra_titles: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """新建发行组之前先查有没有现成的，避开重复 RG。
+
+    支持传入 extra_titles（例如单曲同名主打曲、原语言日文汉字标题等）。
+    """
     clean_title = TITLE_SUFFIX_RE.sub("", first(title)).strip() or first(title)
-    if not clean_title:
+    candidate_titles: list[str] = []
+    for candidate in [clean_title, *(extra_titles or [])]:
+        c = TITLE_SUFFIX_RE.sub("", first(candidate)).strip() or first(candidate)
+        if c and c not in candidate_titles:
+            candidate_titles.append(c)
+    if not candidate_titles:
         return []
-    query = f'releasegroup:"{mb_query_escape(clean_title)}"'
-    if artist.strip():
-        query += f' AND artist:"{mb_query_escape(artist)}"'
-    try:
-        found = mb_request("release-group", {"query": query, "limit": str(limit), "fmt": "json"})
-    except FetchError:
-        return []
+
     rows: list[dict[str, Any]] = []
-    for item in found.get("release-groups") or []:
-        mbid = first(item.get("id"))
-        if not mbid or not title_is_related(item.get("title"), clean_title):
+    seen_mbids: set[str] = set()
+
+    for q_title in candidate_titles:
+        query = f'releasegroup:"{mb_query_escape(q_title)}"'
+        if artist.strip():
+            query += f' AND artist:"{mb_query_escape(artist)}"'
+        try:
+            found = mb_request("release-group", {"query": query, "limit": str(limit), "fmt": "json"})
+        except FetchError:
             continue
-        rows.append({
-            "mbid": mbid,
-            "title": first(item.get("title")),
-            "primary_type": first(item.get("primary-type")),
-            "artist": mb_search_artist(item),
-            "release_count": item.get("count") or 0,
-            "score": item.get("score") or 0,
-            "url": f"https://musicbrainz.org/release-group/{mbid}",
-        })
+        for item in found.get("release-groups") or []:
+            mbid = first(item.get("id"))
+            if not mbid or mbid in seen_mbids:
+                continue
+            item_title = item.get("title")
+            if not any(title_is_related(item_title, cand) for cand in candidate_titles):
+                continue
+            seen_mbids.add(mbid)
+            rows.append({
+                "mbid": mbid,
+                "title": first(item.get("title")),
+                "primary_type": first(item.get("primary-type")),
+                "artist": mb_search_artist(item),
+                "release_count": item.get("count") or 0,
+                "score": item.get("score") or 0,
+                "url": f"https://musicbrainz.org/release-group/{mbid}",
+            })
+        # 如果已经找到了高分（100 分）匹配，就不必再发更多网络请求
+        if any(r.get("score") == 100 or r.get("score") == "100" for r in rows):
+            break
+
+    rows.sort(key=lambda x: int(x.get("score") or 0), reverse=True)
     return rows
 
 

@@ -1353,6 +1353,10 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
         source_errors.append({"source": "Apple/iTunes", "error": str(exc)})
 
     # Apple 有时只返回网页播放器外壳，此时用 iTunes API 的结果补上标题和艺人线索
+    if apple_data and not page_hint and apple_id:
+        page_hint = apple_data
+    if spotify_data and not page_hint and spotify_id:
+        page_hint = spotify_data
     if not title_hint:
         title_hint = first(apple_data.get("title"))
     if not artist_hint:
@@ -1615,8 +1619,28 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     flaky_search_sites = platform_search_notes(external_platform_search)
     source_comparison = comparable_sources(apple_data, mb_data, page_summaries, extra_records)
 
-    # 查重：MusicBrainz 里已经有这个条码的发行吗？（反向命中的那条本身也算）
-    duplicates = mb_duplicate_releases(barcode, first(mb_data.get("release_mbid")))
+    # Release Group 候选：提取额外的候选标题（如单曲同名主打歌名、曲目列表中与 title 不同的标题）
+    clean_title = TITLE_SUFFIX_RE.sub("", first(title)).strip() or first(title)
+    extra_titles: list[str] = []
+    for t in tracks:
+        t_title = clean_value(t.get("title"))
+        if t_title and t_title not in extra_titles and t_title != clean_title:
+            extra_titles.append(t_title)
+    if first(apple_data.get("title")) and first(apple_data.get("title")) != title and first(apple_data.get("title")) not in extra_titles:
+        extra_titles.append(first(apple_data.get("title")))
+
+    release_group_candidates = [] if first(mb_data.get("release_group_mbid")) else mb_release_group_candidates(title, artist, extra_titles=extra_titles)
+
+    # 查重：MusicBrainz 里是否已有对应发行？（通过条码、命中 RG 候选或曲目/艺人关联反查）
+    rg_ids_for_dup = [first(mb_data.get("release_group_mbid"))] if first(mb_data.get("release_group_mbid")) else [item["mbid"] for item in release_group_candidates if item.get("mbid")]
+    duplicates = mb_duplicate_releases(
+        barcode=barcode,
+        known_release_id=first(mb_data.get("release_mbid")),
+        release_group_ids=rg_ids_for_dup,
+        title=title,
+        artist=artist,
+        extra_titles=extra_titles,
+    )
     if reverse_used and first(mb_data.get("release_mbid")):
         duplicates.insert(0, {
             "release_mbid": first(mb_data.get("release_mbid")),
@@ -1624,8 +1648,10 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             "artist": first(mb_data.get("artist")),
             "date": first(mb_data.get("date")),
             "country": first(mb_data.get("country")),
+            "barcode": first(mb_data.get("barcode")),
             "track_count": mb_data.get("track_count") or 0,
             "release_group_mbid": first(mb_data.get("release_group_mbid")),
+            "match_reason": "反向链接命中",
             "linked_sites": sorted({site_info(item.get("url", ""))[0] for item in mb_data.get("external_urls") or [] if site_info(item.get("url", ""))[0]}),
             "url": f"https://musicbrainz.org/release/{mb_data.get('release_mbid')}",
         })
@@ -1636,7 +1662,13 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     for duplicate in duplicates:
         duplicate["missing_sites"] = [site for site in our_sites if site not in duplicate["linked_sites"]]
     if duplicates:
-        source_warnings.append({"source": "Duplicate", "warning": f"MusicBrainz 里已经有同一个条码（{barcode}）的发行，先确认是不是同一张：{'、'.join(item['url'] for item in duplicates)}。若是同一张，请去那张发行上补链接与信息，不要重复建。"})
+        dup_urls = "、".join(item["url"] for item in duplicates)
+        if barcode:
+            source_warnings.append({"source": "Duplicate", "warning": f"MusicBrainz 里已经有同一个条码（{barcode}）的发行，先确认是不是同一张：{dup_urls}。若是同一张，请去那张发行上补链接与信息，不要重复建。"})
+        else:
+            barcodes_info = " / ".join(filter(None, [item.get("barcode") for item in duplicates]))
+            barcode_hint = f"（MB 记录条码：{barcodes_info}）" if barcodes_info else ""
+            source_warnings.append({"source": "Duplicate", "warning": f"MusicBrainz 里已存在此作品的关联发行{barcode_hint}：{dup_urls}。先确认是不是同一张；若是同一张，请在该发行上补充链接与元数据，避免重复创建。"})
 
     # 发行事件：优先用 MusicBrainz 已有的，其次用 Deezer 抽样，最后回退到数字发行的默认值
     mb_events = mb_data.get("release_events") or []
@@ -1706,8 +1738,6 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
             "candidates": candidates,
         })
 
-    release_group_candidates = [] if first(mb_data.get("release_group_mbid")) else mb_release_group_candidates(title, artist)
-
     cover_sources: list[dict[str, str]] = []
     if first(apple_data.get("artwork_url")):
         cover_sources.append({"site": "Apple Music", "url": first(apple_data.get("artwork_url")), "note": "Apple 原图（4000×4000）"})
@@ -1738,6 +1768,15 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     }
 
     catalog_candidates = []
+    if duplicates:
+        for dup in duplicates:
+            dup_bc = dup.get("barcode")
+            if dup_bc and dup_bc not in {item["value"] for item in catalog_candidates}:
+                catalog_candidates.append({
+                    "value": dup_bc,
+                    "source": f"MusicBrainz 已有发行 ({dup.get('release_mbid', '')[:8]})",
+                    "note": f"MusicBrainz 已有对应发行记录了条码 {dup_bc}，确认同版后可一键填入条码",
+                })
     if not catalog_number:
         for value, name in ((deezer_upc, "Deezer UPC"), (spotify_upc, "Spotify UPC")):
             if not value or value in {item["value"] for item in catalog_candidates}:
@@ -1774,12 +1813,24 @@ def build_report(album_name: str, input_url: str = "", input_urls: Any = None, m
     work_edit_note = f"Work/recording credit follow-up for {title}.\n\nUse only credits confirmed by the linked official or authorized source. Leave ISWC and collecting-society IDs blank when they cannot be verified."
     if work_relations["markdown"]:
         work_edit_note += "\n\n" + work_relations["markdown"]
+    # 只要任意一个主要来源（Apple / Deezer / Spotify / MB）成功抓取到了数据，就不应判定 page_hint 缺失
+    if not page_hint:
+        for candidate_src in (apple_data, deezer_data, spotify_data, mb_data):
+            if candidate_src and (candidate_src.get("title") or candidate_src.get("artist") or candidate_src.get("tracks")):
+                page_hint = candidate_src
+                break
+
     report = {
         "input": {"album_name": album_name, "url": primary_url, "urls": source_urls, "apple_id": apple_id, "deezer_id": deezer_id, "musicbrainz_release_id": release_id, "musicbrainz_release_group_id": release_group_id},
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "confidence": {
-            "overall": "low" if (source_errors or matched_by_title_only or not page_hint) else "medium",
-            "notes": ["自动整理结果必须以发行页面、封面和官方 credits 人工核对后再提交 MusicBrainz。", compilation_note] + (["本次 MusicBrainz 匹配只用了标题，未使用艺人，存在同名误配风险。"] if matched_by_title_only else []) + (["输入链接页面未能成功解析，关键字段可能缺失，建议重试或补充其它来源链接。"] if not page_hint else []),
+            "overall": "low" if (source_errors or matched_by_title_only or not page_hint) else ("high" if (first(mb_data.get("release_mbid")) or duplicates) else "medium"),
+            "notes": (
+                ["自动整理结果必须以发行页面、封面和官方 credits 人工核对后再提交 MusicBrainz。", compilation_note]
+                + (["本次 MusicBrainz 匹配只用了标题，未使用艺人，存在同名误配风险。"] if matched_by_title_only else [])
+                + (["输入链接页面未能成功解析，关键字段可能缺失，建议重试或补充其它来源链接。"] if not page_hint else [])
+                + (["MusicBrainz 中已检索到高度匹配的已有发行，建议优先核验并复用已有条目。"] if duplicates else [])
+            ),
         },
         "release": {
             "title": title,

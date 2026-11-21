@@ -1174,6 +1174,149 @@ body.companion-mode .cockpit-center {
   background: var(--amber-faint);
   border-color: rgba(245, 158, 11, 0.3);
 }
+.pill.is-success {
+  color: var(--cyan);
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.3);
+}
+.pill.is-warning {
+  color: var(--amber);
+  background: var(--amber-faint);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.pill.is-accent {
+  color: var(--accent);
+  background: var(--accent-faint);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+/* ==================== MB 雷达与查重卡片 ==================== */
+.mb-radar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.radar-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.radar-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+.radar-card.is-dup {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.05) 0%, var(--surface-raised) 100%);
+}
+.radar-card.is-rg-cand, .radar-card.is-rg-hit {
+  border-color: rgba(99, 102, 241, 0.4);
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.06) 0%, var(--surface-raised) 100%);
+}
+.radar-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.radar-badge {
+  font: 600 11.5px var(--sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.radar-badge.is-alert { color: var(--amber); }
+.radar-badge.is-accent { color: var(--accent); }
+.radar-subtag {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.radar-dup-item, .radar-rg-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+}
+.radar-dup-title, .radar-rg-title {
+  color: var(--ink-1);
+  text-decoration: none;
+  font-size: 13px;
+}
+.radar-dup-title:hover, .radar-rg-title:hover {
+  text-decoration: underline;
+  color: var(--accent);
+}
+.radar-dup-meta, .radar-rg-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.badge-sm {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+.radar-score {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cyan);
+}
+.radar-dup-actions, .radar-rg-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink-2);
+}
+.btn-ghost:hover {
+  background: var(--surface);
+  color: var(--ink-1);
+}
+.confidence-box {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.confidence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.confidence-label {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.confidence-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
 
 .hidden { display: none !important; }
 
