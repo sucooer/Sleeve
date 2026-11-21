@@ -138,6 +138,15 @@
             <span id="status" class="status">等待输入</span>
             <button class="primary" type="submit">查询</button>
           </div>
+
+          <div id="lookup-skeleton" class="skeleton-wrap hidden" aria-hidden="true">
+            <div class="skeleton-bar skeleton-shimmer"></div>
+            <div class="skeleton-grid">
+              <div class="skeleton-card skeleton-shimmer"></div>
+              <div class="skeleton-card skeleton-shimmer"></div>
+              <div class="skeleton-card skeleton-shimmer"></div>
+            </div>
+          </div>
         </form>
       </div>
     </section>
@@ -340,6 +349,7 @@
               </div>
             </div>
             <div class="tracklist-tabs" role="tablist">
+              <span class="tab-indicator" aria-hidden="true"></span>
               <button type="button" class="tab-btn active" data-tab="table">曲目表格</button>
               <button type="button" class="tab-btn" data-tab="parser">Track Parser 格式</button>
               <button type="button" class="tab-btn" data-tab="artist">Track Parser（带艺人）</button>
@@ -558,7 +568,14 @@
   <div id="usage-badge" class="usage-badge hidden" aria-live="polite"></div>
 
   <!-- 全局轻量 Toast -->
-  <div id="toast" class="toast hidden" aria-live="polite"></div>
+  <div id="toast" class="toast hidden" aria-live="polite">
+    <div class="toast-content">
+      <span class="toast-icon" aria-hidden="true">✓</span>
+      <span class="toast-msg"></span>
+      <button type="button" class="toast-close" aria-label="关闭提示">×</button>
+    </div>
+    <div class="toast-progress"><span class="toast-progress-bar"></span></div>
+  </div>
 
   <script src="/app.js?v=__VERSION__"></script>
 </body>

@@ -138,26 +138,52 @@ a:hover { text-decoration: underline; }
    * 外面再套一层大面积高斯模糊只是白烧 GPU（4 个 700~820px 的层会一直参与合成）。
    */
   background: radial-gradient(circle, rgba(88, 101, 242, .5) 0%, rgba(88, 101, 242, 0) 70%);
+  will-change: transform;
 }
 .blob-a {
   width: 820px; height: 820px;
   top: -240px; left: -180px;
   background: radial-gradient(circle, rgba(88, 101, 242, .50) 0%, rgba(88, 101, 242, 0) 70%);
+  animation: blobFloatA 22s ease-in-out infinite alternate;
 }
 .blob-b {
   width: 760px; height: 760px;
   top: 200px; right: -280px;
   background: radial-gradient(circle, rgba(110, 90, 230, .42) 0%, rgba(110, 90, 230, 0) 70%);
+  animation: blobFloatB 26s ease-in-out infinite alternate;
 }
 .blob-c {
   width: 700px; height: 700px;
   top: 46%; left: -220px;
   background: radial-gradient(circle, rgba(236, 72, 189, .3) 0%, rgba(236, 72, 189, 0) 70%);
+  animation: blobFloatC 20s ease-in-out infinite alternate;
 }
 .blob-d {
   width: 720px; height: 720px;
   bottom: -200px; right: -160px;
   background: radial-gradient(circle, rgba(240, 178, 50, .26) 0%, rgba(240, 178, 50, 0) 70%);
+  animation: blobFloatD 24s ease-in-out infinite alternate;
+}
+
+@keyframes blobFloatA {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(50px, 35px, 0) scale(1.06); }
+  100% { transform: translate3d(-30px, 60px, 0) scale(0.96); }
+}
+@keyframes blobFloatB {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-45px, -30px, 0) scale(1.05); }
+  100% { transform: translate3d(35px, 40px, 0) scale(0.95); }
+}
+@keyframes blobFloatC {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(35px, -40px, 0) scale(1.08); }
+  100% { transform: translate3d(-40px, 25px, 0) scale(0.94); }
+}
+@keyframes blobFloatD {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-35px, 30px, 0) scale(1.06); }
+  100% { transform: translate3d(30px, -35px, 0) scale(0.96); }
 }
 
 /* 内容浮在光斑之上 */
@@ -244,6 +270,11 @@ a:hover { text-decoration: underline; }
 .card,
 .panel {
   background: var(--surface);
+  transition: border-color .25s ease, box-shadow .25s ease;
+}
+.card:hover {
+  border-color: rgba(255, 255, 255, .15);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .32), 0 0 20px rgba(88, 101, 242, .05);
 }
 
 .eyebrow {
@@ -433,7 +464,38 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   color: #ffffff;
   font-weight: 700;
   box-shadow: 0 8px 22px rgba(51, 209, 220, .32);
+  transition: transform .12s cubic-bezier(.2, 0, 0, 1), box-shadow .2s ease, background .2s ease;
 }
+.primary:active,
+.secondary:active,
+.btn:active,
+.chip-btn:active {
+  transform: scale(.96) !important;
+}
+
+/* 查询按钮加载态 (#1-199) */
+.primary.is-loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+.primary.is-loading::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  top: 50%;
+  left: 50%;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, .3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: btnSpin .75s linear infinite;
+}
+@keyframes btnSpin {
+  to { transform: rotate(360deg); }
+}
+
 .secondary,
 .btn {
   padding: 0 13px;
@@ -443,19 +505,21 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
   color: var(--ink-3);
   font-size: 12px;
   font-weight: 500;
+  transition: transform .12s cubic-bezier(.2, 0, 0, 1), background .15s ease, border-color .15s ease;
 }
 .secondary:hover, .btn:hover { background: rgba(255, 255, 255, .11); }
 
-/* 复制成功后的原地反馈：只换颜色，不动文字、不动尺寸。
-   文字一换，按钮宽度就变，后面所有按钮会被顶着左移 —— 工具栏一排按钮同时
-   抖一下比没有反馈更糟。所以这里只做「颜色 + 描边」的短暂高亮，
-   完整提示交给全局 Toast。 */
+/* 复制成功后的原地反馈增强 (#1-158) */
 .btn.is-copied,
 .copy-note.is-copied,
-.lookup-link.is-copied {
-  background: rgba(87, 242, 135, .16);
-  border-color: rgba(87, 242, 135, .45);
-  color: var(--green);
+.lookup-link.is-copied,
+.copyable-code.is-copied,
+.chip-btn.is-copied {
+  background: rgba(87, 242, 135, .18) !important;
+  border-color: rgba(87, 242, 135, .6) !important;
+  color: var(--green) !important;
+  transform: scale(.98);
+  box-shadow: 0 0 16px rgba(87, 242, 135, .2) !important;
 }
 
 /* 次要动作的小号变体：和提示文字挤在同一行时，36px 的按钮块头显得太重。
@@ -488,10 +552,81 @@ button:disabled { opacity: .55; cursor: progress; transform: none; }
 .status.error { color: var(--red); }
 .status.error::before { background: var(--red); }
 
+/* ---------- 错误震动动画 (#1-037) ---------- */
+.shake-error {
+  animation: errorShake .38s cubic-bezier(.36, .07, .19, .97) both;
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 2px rgba(242, 63, 67, .28) !important;
+}
+@keyframes errorShake {
+  10%, 90% { transform: translate3d(-3px, 0, 0); }
+  20%, 80% { transform: translate3d(5px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-5px, 0, 0); }
+  40%, 60% { transform: translate3d(4px, 0, 0); }
+}
+
+/* ---------- 骨架屏加载态 (#1-051, #1-056) ---------- */
+.skeleton-wrap {
+  margin-top: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.skeleton-bar {
+  height: 48px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+}
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s3);
+}
+.skeleton-card {
+  height: 120px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+}
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .05), transparent);
+  animation: shimmerSweep 1.6s ease-in-out infinite;
+}
+@keyframes shimmerSweep {
+  100% { transform: translateX(100%); }
+}
+
 /* ============================================================
    报告区
    ============================================================ */
 .results { padding: 0 var(--pad-x); }
+
+/* ---------- 报告卡片交错入场 (#2-002, #2-118) ---------- */
+.results.is-revealing .reportbar,
+.results.is-revealing .phase,
+.results.is-revealing .card {
+  animation: cardStaggerIn .45s cubic-bezier(.16, 1, .3, 1) both;
+  animation-delay: calc(var(--stagger-idx, 0) * 45ms);
+}
+@keyframes cardStaggerIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
 /*
  * 锚点跳转的落点修正：左导航点的是 #m01~#m12 这些卡片，
@@ -1035,26 +1170,44 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
   border-color: rgba(87, 242, 135, .4);
   color: var(--green);
 }
-/* 复制成功后的常驻高亮（1.3 秒）：ISRC 徽标本身就有边框，
-   所以改成配色即可，不需要额外的尺寸变化。 */
+/* 复制成功后的常驻高亮增强 (#1-158) */
 .copyable-code.is-copied {
-  background: rgba(87, 242, 135, .28);
-  border-color: rgba(87, 242, 135, .6);
-  color: var(--green);
+  position: relative;
+  background: rgba(87, 242, 135, .28) !important;
+  border-color: rgba(87, 242, 135, .7) !important;
+  color: var(--green) !important;
+  transform: scale(0.97);
+  transition: all .25s cubic-bezier(.3, 1.5, .5, 1);
+  box-shadow: 0 0 16px rgba(87, 242, 135, .25) !important;
 }
 
 .external-table { min-width: 640px; }
 .external-table td { font-size: 11.5px; }
 
-/* ---------- 曲目表 Tab 切换 ---------- */
+/* ---------- 曲目表 Tab 切换 (#1-019) ---------- */
 .tracklist-tabs {
+  position: relative;
   display: flex;
   gap: 6px;
   margin-bottom: var(--s3);
   border-bottom: 1px solid var(--line-2);
   padding-bottom: var(--s2);
 }
+.tab-indicator {
+  position: absolute;
+  bottom: var(--s2);
+  height: 29px;
+  background: rgba(88, 101, 242, .22);
+  border: 1px solid rgba(88, 101, 242, .45);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+  transition: transform .25s cubic-bezier(.65, 0, .35, 1), width .25s cubic-bezier(.65, 0, .35, 1);
+  opacity: 0;
+  z-index: 1;
+}
 .tab-btn {
+  position: relative;
+  z-index: 2;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-xs);
@@ -1063,19 +1216,31 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
   font-weight: 500;
   color: var(--ink-4);
   cursor: pointer;
-  transition: all .15s;
+  transition: color .15s, transform .12s cubic-bezier(.2, 0, 0, 1);
 }
 .tab-btn:hover {
   color: var(--ink-2);
-  background: rgba(255, 255, 255, .04);
+}
+.tab-btn:active {
+  transform: scale(.96);
 }
 .tab-btn.active {
   color: var(--ink-1);
-  background: rgba(88, 101, 242, .18);
-  border-color: rgba(88, 101, 242, .38);
+  font-weight: 600;
 }
 .tracklist-pane {
   display: block;
+  animation: paneCrossFade .22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes paneCrossFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .parser-preview {
@@ -1603,29 +1768,107 @@ code { color: var(--cyan); font: 11.5px var(--mono); }
   .usage-badge { font-size: 11px; right: var(--s3, 12px); bottom: var(--s3, 12px); }
 }
 
-/* ---------- 全局 Toast 提示 ---------- */
+/* ---------- 全局 Toast 提示 (#1-018) ---------- */
 .toast {
   position: fixed;
-  bottom: 24px;
+  top: 24px;
   left: 50%;
-  transform: translateX(-50%) translateY(12px);
-  background: rgba(22, 23, 26, .94);
+  transform: translateX(-50%) translateY(-20px) scale(0.95);
+  background: rgba(18, 19, 23, .92);
   border: 1px solid rgba(88, 101, 242, .45);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .5), 0 0 0 1px rgba(255, 255, 255, .06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   color: var(--ink-1);
-  padding: 8px 18px;
-  border-radius: var(--radius-pill);
-  font-size: 13px;
-  font-weight: 500;
+  border-radius: var(--radius-sm);
   z-index: 1000;
-  pointer-events: none;
   opacity: 0;
-  transition: opacity .2s ease, transform .2s ease;
-  white-space: nowrap;
+  pointer-events: none;
+  transition: transform .35s cubic-bezier(.18, .89, .32, 1.28), opacity .25s ease;
+  overflow: hidden;
+  max-width: min(440px, calc(100vw - 32px));
+  user-select: none;
 }
 .toast.show {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0) scale(1);
+}
+.toast.toast-error {
+  border-color: rgba(242, 63, 67, .55);
+}
+.toast.toast-error .toast-icon {
+  color: var(--red);
+}
+.toast.toast-dismissing {
+  transition: transform .22s ease-in, opacity .2s ease-in;
+  transform: translateX(-50%) translateY(-24px) scale(0.9);
+  opacity: 0;
+  pointer-events: none;
+}
+.toast-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.toast-icon {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1;
+}
+.toast-msg {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toast-close {
+  background: transparent;
+  border: none;
+  color: var(--ink-4);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  margin-left: auto;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color .15s;
+}
+.toast-close:hover {
+  color: var(--ink-1);
+}
+.toast-progress {
+  height: 2px;
+  background: rgba(255, 255, 255, .08);
+  width: 100%;
+}
+.toast-progress-bar {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--blurple), var(--cyan-2));
+  width: 100%;
+  transform-origin: left;
+  transition: transform linear;
+}
+
+/* 动效适配：降低动效偏好模式 */
+@media (prefers-reduced-motion: reduce) {
+  .blob-a, .blob-b, .blob-c, .blob-d,
+  .results.is-revealing .reportbar,
+  .results.is-revealing .phase,
+  .results.is-revealing .card,
+  .tracklist-pane,
+  .tab-indicator,
+  .toast,
+  .toast-progress-bar,
+  .shake-error,
+  .skeleton-shimmer::after {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
 }

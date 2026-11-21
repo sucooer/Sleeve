@@ -171,6 +171,29 @@ const splitUrls = (values) => (Array.isArray(values) ? values : [values])
   .map((url) => url.trim())
   .filter(Boolean);
 
+// ---------- 动效支持函数 (#1-019, #2-002) ----------
+function updateTabIndicator(activeBtn) {
+  if (!activeBtn) return;
+  const container = activeBtn.parentElement;
+  if (!container) return;
+  const indicator = container.querySelector(".tab-indicator");
+  if (!indicator) return;
+  indicator.style.width = `${activeBtn.offsetWidth}px`;
+  indicator.style.transform = `translateX(${activeBtn.offsetLeft}px)`;
+  indicator.style.opacity = "1";
+}
+
+function triggerStaggerEntrance(container) {
+  if (!container) return;
+  container.classList.remove("is-revealing");
+  void container.offsetWidth;
+  const items = container.querySelectorAll(".reportbar, .phase, .card");
+  items.forEach((item, idx) => {
+    item.style.setProperty("--stagger-idx", String(Math.min(idx, 16)));
+  });
+  container.classList.add("is-revealing");
+}
+
 function renderReport(report) {
   // 单曲链接的报告结构与专辑报告几乎不重叠，走独立渲染
   if (report.report_type === "song") {
@@ -309,7 +332,11 @@ function renderReport(report) {
   renderRail(report, fields.length + (report.source_comparison || []).length);
   // 工具栏高度会随标题换行 / 按钮换行变化，左导航与锚点的让位量要跟着实测值走
   syncBarOffset();
-  window.scrollTo({ top: $("#results").offsetTop - 20, behavior: "smooth" });
+  const resultsBox = $("#results");
+  triggerStaggerEntrance(resultsBox);
+  const activeTab = document.querySelector(".tracklist-tabs .tab-btn.active");
+  if (activeTab) updateTabIndicator(activeTab);
+  window.scrollTo({ top: resultsBox.offsetTop - 20, behavior: "smooth" });
 }
 
 function renderSongReport(report) {
@@ -317,6 +344,7 @@ function renderSongReport(report) {
   $("#results").classList.add("hidden");
   const box = $("#song-results");
   box.classList.remove("hidden");
+  triggerStaggerEntrance(box);
   $("#song-report-title").textContent = s.title || "单曲资料";
   const albumPart = s.album ? `《${s.album}》` : "所属专辑未确认";
   $("#song-report-subtitle").textContent = `${s.artist || "未知艺人"} · ${albumPart}${s.release_date ? ` · ${s.release_date}` : ""}`;
@@ -747,9 +775,20 @@ async function runLookup() {
   const manualCatalog = manualCatalogValue;
   const urls = collectUrls();
   const status = $("#status");
+  const textarea = $("#source-urls");
+  const skeleton = $("#lookup-skeleton");
+
   if (!urls.length) {
     status.className = "status error";
     status.textContent = "请粘贴至少一个来源链接";
+    if (textarea) {
+      textarea.classList.remove("shake-error");
+      void textarea.offsetWidth;
+      textarea.classList.add("shake-error");
+      setTimeout(() => textarea.classList.remove("shake-error"), 400);
+      textarea.focus();
+    }
+    showToast("请粘贴至少一个来源链接", "error");
     return;
   }
   status.className = "status";
@@ -761,7 +800,13 @@ async function runLookup() {
   };
   tickStatus();
   const statusTimer = setInterval(tickStatus, 1000);
-  if (lookupButton) lookupButton.disabled = true;
+  if (lookupButton) {
+    lookupButton.disabled = true;
+    lookupButton.classList.add("is-loading");
+  }
+  if (skeleton && $("#results").classList.contains("hidden") && $("#song-results").classList.contains("hidden")) {
+    skeleton.classList.remove("hidden");
+  }
   try {
     const response = await apiFetch("/api/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls, catalog: manualCatalog }) });
     const data = await response.json();
@@ -771,6 +816,7 @@ async function runLookup() {
       status.textContent = data.reason || "无法解析该链接，请换一个站点链接再试";
       return;
     }
+    if (skeleton) skeleton.classList.add("hidden");
     renderReport(data);
     // 把查询条件写回地址栏：万一报告页被导航走（例如点开外部链接），按返回键还能自动重跑
     try {
@@ -785,9 +831,14 @@ async function runLookup() {
   } catch (error) {
     status.className = "status error";
     status.textContent = error.message;
+    showToast(error.message, "error");
   } finally {
     clearInterval(statusTimer);
-    if (lookupButton) lookupButton.disabled = false;
+    if (skeleton) skeleton.classList.add("hidden");
+    if (lookupButton) {
+      lookupButton.disabled = false;
+      lookupButton.classList.remove("is-loading");
+    }
   }
 }
 
@@ -882,20 +933,42 @@ function showNotice(text) {
 }
 
 let toastTimer = 0;
-function showToast(message, duration = 1800) {
+
+function hideToast() {
+  const toast = $("#toast");
+  if (!toast || toast.classList.contains("hidden")) return;
+  toast.classList.add("toast-dismissing");
+  clearTimeout(toastTimer);
+  setTimeout(() => {
+    toast.className = "toast hidden";
+  }, 220);
+}
+
+function showToast(message, type = "success", duration = 2400) {
   const toast = $("#toast");
   if (!toast) return;
-  toast.textContent = message;
-  toast.classList.remove("hidden");
+  const msgEl = toast.querySelector(".toast-msg") || toast;
+  const iconEl = toast.querySelector(".toast-icon");
+  const barEl = toast.querySelector(".toast-progress-bar");
+
+  if (msgEl) msgEl.textContent = message;
+  if (iconEl) iconEl.textContent = type === "error" ? "✕" : "✓";
+
+  toast.className = `toast ${type === "error" ? "toast-error" : ""}`;
   void toast.offsetWidth;
   toast.classList.add("show");
+
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toast.classList.remove("show");
-    setTimeout(() => {
-      if (!toast.classList.contains("show")) toast.classList.add("hidden");
-    }, 220);
-  }, duration);
+
+  if (barEl) {
+    barEl.style.transition = "none";
+    barEl.style.transform = "scaleX(1)";
+    void barEl.offsetWidth;
+    barEl.style.transition = `transform ${duration}ms linear`;
+    barEl.style.transform = "scaleX(0)";
+  }
+
+  toastTimer = setTimeout(hideToast, duration);
 }
 
 // 复制成功的原地高亮：加 .is-copied，1.3 秒后去掉。
@@ -1053,12 +1126,20 @@ $("#copy-annotation").addEventListener("click", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
-  // 曲目表 Tab 切换
+  // Toast 关闭按钮 (#1-018)
+  const toastClose = event.target.closest("#toast .toast-close");
+  if (toastClose) {
+    hideToast();
+    return;
+  }
+
+  // 曲目表 Tab 切换 (#1-019)
   const tabBtn = event.target.closest(".tracklist-tabs .tab-btn");
   if (tabBtn) {
     const tab = tabBtn.dataset.tab;
     const tabs = tabBtn.parentElement.querySelectorAll(".tab-btn");
     tabs.forEach((b) => b.classList.toggle("active", b === tabBtn));
+    updateTabIndicator(tabBtn);
     const panes = {
       table: $("#tab-pane-table"),
       parser: $("#tab-pane-parser"),
@@ -1271,3 +1352,8 @@ async function loadUsageBadge() {
 // 启动认证检查（放在文件末尾：$ 与 DOM 都已就绪）。
 // 用量徽标在认证流程走完后一并加载（未登录时 401 会由 apiFetch 弹回登录层）。
 initAuth().finally(loadUsageBadge);
+
+window.addEventListener("resize", () => {
+  const activeTab = document.querySelector(".tracklist-tabs .tab-btn.active");
+  if (activeTab) updateTabIndicator(activeTab);
+});
