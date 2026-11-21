@@ -669,7 +669,36 @@ function renderReport(report) {
   $("#sources").innerHTML = report.sources.length ? report.sources.map((source) => `<div class="source"><div class="source-name">${escapeHtml(source.name)} <span class="muted">${escapeHtml(source.status || "")}</span></div><a href="${escapeHtml(safeHref(source.url))}" target="_blank" rel="noreferrer">${escapeHtml(source.url || "无链接")}</a></div>`).join("") : `<div class="empty">没有成功的来源。</div>`;
 
   const coverSources = report.release.cover_sources || [];
-  $("#cover-sources").innerHTML = coverSources.length ? `<div class="lookup-hint">各平台原图（提交前取最大的一张，不要裁剪或放大）：</div><div class="lookup-actions">${coverSources.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">${escapeHtml(item.site)} 原图</a>`).join("")}${report.release.cover_upload_url ? `<a class="lookup-link" href="${escapeHtml(safeHref(report.release.cover_upload_url))}" target="_blank" rel="noreferrer" title="${escapeHtml(report.release.cover_upload_url)}">给已存在的 Release 补图 →</a>` : ""}</div><p class="muted">${coverSources.map((item) => `${escapeHtml(item.site)}：${escapeHtml(item.note)}`).join(" · ")}</p>` : "";
+  $("#cover-sources").innerHTML = coverSources.length ? `
+    <div class="cover-card">
+      <div class="cover-card-header">
+        <span class="cover-card-badge">🖼️ 封面原图</span>
+        <span class="cover-card-hint">最大尺寸 · 无需裁剪</span>
+      </div>
+      <div class="cover-card-list">
+        ${coverSources.map((item) => {
+          const resMatch = (item.note || "").match(/\d+\s*[×xX*]\s*\d+/);
+          const resLabel = resMatch ? resMatch[0] : (item.note || "原图");
+          return `
+          <a class="cover-item" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="打开 ${escapeHtml(item.site)} 原图 (${escapeHtml(item.note || "")})">
+            <div class="cover-item-left">
+              <span class="cover-site-name">${escapeHtml(item.site)}</span>
+              <span class="cover-res-badge">${escapeHtml(resLabel)}</span>
+            </div>
+            <span class="cover-external-icon">↗</span>
+          </a>`;
+        }).join("")}
+      </div>
+      ${report.release.cover_upload_url ? `
+        <div class="cover-upload-row">
+          <a class="cover-upload-btn" href="${escapeHtml(safeHref(report.release.cover_upload_url))}" target="_blank" rel="noreferrer" title="跳转至 MusicBrainz 该 Release 的封面上传页">
+            <span>⚡ 给已存在的 Release 补图</span>
+            <span>→</span>
+          </a>
+        </div>
+      ` : ""}
+    </div>
+  ` : "";
 
   // 封面 Edit note 草稿：原本挂在 11「Edit note 草稿」里，和封面/来源隔了半页；
   // 搬进本卡、紧贴来源列表，写封面说明时不用来回滚。
@@ -705,11 +734,11 @@ function renderReport(report) {
   const links = report.lookup_links || [];
   $("#lookup-links").innerHTML = links.length ? `<div class="lookup-hint">没找到品番时，用下面的入口核对：站内搜索最直接；若商店返回 403（OTOTOY 的搜索页会拦脚本流量），改用 Google 站内搜索。找到专辑后把商店链接贴回上方即可自动取品番。</div><div class="lookup-actions">${links.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">${escapeHtml(item.name)}</a>`).join("")}</div>` : "";
 
-  // 查重：MusicBrainz 里已经存在同条码的发行吗？
+  // 查重：MusicBrainz 查重告警已移至右栏 MB RADAR 统一高亮展示
+  // 此处保留 duplicates DOM 节点仅供测试与兼容性读取，左侧卡片保持 hidden
   const duplicates = report.duplicates || [];
-  $("#duplicates-card").classList.toggle("hidden", !duplicates.length);
-  $("#duplicates").innerHTML = duplicates.length ? duplicates.map((item) => `<div class="duplicate"><div class="duplicate-head"><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer"><strong>${escapeHtml(display(item.title))}</strong></a><span class="muted">${escapeHtml(display(item.artist))} · ${escapeHtml(display(item.date))} · ${escapeHtml(item.country || "地区未确认")} · ${escapeHtml(item.track_count || "?")} 轨</span></div><div class="duplicate-body"><div><span class="muted">那张已挂：</span>${(item.linked_sites || []).length ? escapeHtml(item.linked_sites.join("、")) : "没有任何平台链接"}</div><div><span class="muted">本张还缺：</span>${(item.missing_sites || []).length ? escapeHtml(item.missing_sites.join("、")) : "无，链接已齐"}</div></div></div>`).join("") : "";
-  if (duplicates.length) $("#duplicates").insertAdjacentHTML("beforeend", `<p class="muted">同一张发行不要重复建：如果是同一张，请去上面那条 Release 上补冲突/缺失的链接与信息；只有确认是不同的发行（不同地区、不同厂牌、不同母带）才新建。</p>`);
+  $("#duplicates-card")?.classList.add("hidden");
+  $("#duplicates").innerHTML = duplicates.length ? duplicates.map((item) => `<div class="duplicate"><div class="duplicate-head"><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer"><strong>${escapeHtml(display(item.title))}</strong></a> <span class="muted">${escapeHtml(display(item.artist))} · ${escapeHtml(display(item.date))} · ${escapeHtml(item.country || "地区未确认")} · ${escapeHtml(item.track_count || "?")} 轨</span></div><div class="duplicate-body"><div><span class="muted">那张已挂：</span>${(item.linked_sites || []).length ? escapeHtml(item.linked_sites.join("、")) : "没有任何平台链接"}</div><div><span class="muted">本张还缺：</span>${(item.missing_sites || []).length ? escapeHtml(item.missing_sites.join("、")) : "无，链接已齐"}</div></div></div>`).join("") : "";
 
   // 发行地区：给出 [None] / [Worldwide] / 全部国家 三种可复制形态
   const events = report.release_events || {};
