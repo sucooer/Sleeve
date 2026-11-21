@@ -689,7 +689,13 @@ function renderReport(report) {
   // 并给出清除按钮。
   const catalogBlocks = [];
   if (manualCatalogValue) {
-    catalogBlocks.push(`<div class="lookup-hint manual-catalog">当前手工品番：<code>${escapeHtml(manualCatalogValue)}</code>（覆盖了自动抓到的品番，之后的查询也会带上）<button class="secondary btn-sm clear-catalog" type="button">清除手工品番</button></div>`);
+    catalogBlocks.push(`<div class="manual-catalog">
+      <div class="manual-catalog-header">
+        <span class="manual-catalog-title">手工品番：<code>${escapeHtml(manualCatalogValue)}</code></span>
+        <button class="clear-catalog" type="button" title="清除手工品番，恢复为自动抓取">清除</button>
+      </div>
+      <span class="manual-catalog-desc">覆盖了自动抓到的品番，后续查询也会生效</span>
+    </div>`);
   }
   if (candidates.length) {
     catalogBlocks.push(`<div class="lookup-hint">品番候选（点击采用为手工品番）：</div><div class="lookup-actions">${candidates.map((item) => `<button class="lookup-link use-catalog" data-value="${escapeHtml(item.value)}">${escapeHtml(item.value)}（${escapeHtml(item.source)}）</button>`).join("")}</div><div class="lookup-hint">${escapeHtml(candidates[0].note)}</div>`);
