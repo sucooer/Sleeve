@@ -534,7 +534,7 @@ function initCmdPalette() {
   });
 }
 
-function renderEditNotes(editNotes, filterCover = true) {
+function renderEditNotes(editNotes, filterCover = false) {
   const metaMap = {
     release: {
       badge: "Release 草稿",
@@ -544,6 +544,15 @@ function renderEditNotes(editNotes, filterCover = true) {
       btnLabel: "复制 Release 说明",
       btnToast: "Release 提交说明",
       icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>`,
+    },
+    cover: {
+      badge: "Cover 草稿",
+      badgeClass: "badge-cover",
+      title: "Cover 封面上传说明",
+      sub: "用于在 MusicBrainz 上传或补充封面图时，填入 Edit Note 框（含原图直链）",
+      btnLabel: "复制 Cover 说明",
+      btnToast: "Cover 提交说明",
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
     },
     work: {
       badge: "Work 关系草稿",
@@ -563,18 +572,13 @@ function renderEditNotes(editNotes, filterCover = true) {
       btnToast: "Recording 提交说明",
       icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`,
     },
-    cover: {
-      badge: "Cover 草稿",
-      badgeClass: "badge-cover",
-      title: "Cover 封面上传说明",
-      sub: "用于在 MusicBrainz 上传或补充封面图时，填入 Edit Note 框",
-      btnLabel: "复制 Cover 说明",
-      btnToast: "Cover 提交说明",
-      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
-    },
   };
 
-  const entries = Object.entries(editNotes || {}).filter(([name]) => !filterCover || name !== "cover");
+  const orderMap = { release: 1, cover: 2, work: 3, recording: 4 };
+  const entries = Object.entries(editNotes || {})
+    .filter(([name]) => !filterCover || name !== "cover")
+    .sort((a, b) => (orderMap[a[0].toLowerCase()] || 99) - (orderMap[b[0].toLowerCase()] || 99));
+
   if (!entries.length) {
     return `<div class="empty">暂无 Edit Note 草稿。</div>`;
   }
