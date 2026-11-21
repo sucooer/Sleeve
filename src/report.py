@@ -408,6 +408,7 @@ def work_relations_markdown(items: list[dict[str, Any]], apple_credits: list[dic
                 lines.append(f"  - {rel.get('type') or '?'}: {rel.get('artist') or ''}{attr}{mbid}")
         if not item.get("works") and not item.get("recording_relations") and not item.get("error"):
             lines.append("- 无关联 work（建 Work 时注意别与已有同名词条重复）")
+        lines.append("")
     if not lines:
         return ""
     return "\n".join(lines).rstrip() + "\n\n以上为自动查询/抓取结果，必须逐条人工核对后再挂载；ISWC 查不到就留空。"

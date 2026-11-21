@@ -534,6 +534,89 @@ function initCmdPalette() {
   });
 }
 
+function renderEditNotes(editNotes, filterCover = true) {
+  const metaMap = {
+    release: {
+      badge: "Release 草稿",
+      badgeClass: "badge-release",
+      title: "Release 发行提交说明",
+      sub: "用于在 MusicBrainz 添加或编辑 Release 时，填入步骤底部的 Edit Note 框（含来源清单）",
+      btnLabel: "复制 Release 说明",
+      btnToast: "Release 提交说明",
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>`,
+    },
+    work: {
+      badge: "Work 关系草稿",
+      badgeClass: "badge-work",
+      title: "Work / 录音关系提交说明",
+      sub: "用于在 MusicBrainz 关联 Work、作词/作曲和制作人员时，填入 Edit Note 框（含逐轨 recording 对应状态）",
+      btnLabel: "复制 Work 关系说明",
+      btnToast: "Work 关系提交说明",
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`,
+    },
+    recording: {
+      badge: "Recording 草稿",
+      badgeClass: "badge-recording",
+      title: "Recording 录音提交说明",
+      sub: "用于单曲或独立录音条目提交说明",
+      btnLabel: "复制 Recording 说明",
+      btnToast: "Recording 提交说明",
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`,
+    },
+    cover: {
+      badge: "Cover 草稿",
+      badgeClass: "badge-cover",
+      title: "Cover 封面上传说明",
+      sub: "用于在 MusicBrainz 上传或补充封面图时，填入 Edit Note 框",
+      btnLabel: "复制 Cover 说明",
+      btnToast: "Cover 提交说明",
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`,
+    },
+  };
+
+  const entries = Object.entries(editNotes || {}).filter(([name]) => !filterCover || name !== "cover");
+  if (!entries.length) {
+    return `<div class="empty">暂无 Edit Note 草稿。</div>`;
+  }
+
+  return entries.map(([name, note]) => {
+    const key = name.toLowerCase();
+    const meta = metaMap[key] || {
+      badge: `${name.toUpperCase()} 草稿`,
+      badgeClass: "badge-default",
+      title: `${name.toUpperCase()} 提交说明`,
+      sub: "用于对应环节的 Edit Note 框",
+      btnLabel: `复制 ${name} 说明`,
+      btnToast: `${name} 提交说明`,
+      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+    };
+
+    return `
+      <div class="note-card note-card-${escapeHtml(key)}">
+        <div class="note-card-head">
+          <div class="note-card-left">
+            <span class="note-card-badge ${meta.badgeClass}">${meta.icon}<span>${escapeHtml(meta.badge)}</span></span>
+            <div class="note-card-info">
+              <h4 class="note-card-title">${escapeHtml(meta.title)}</h4>
+              <p class="note-card-sub">${escapeHtml(meta.sub)}</p>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-copy-note copy-note" data-note="${escapeHtml(note)}" data-label="${escapeHtml(meta.btnToast)}" type="button" title="点击复制整段说明到剪贴板">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span>${escapeHtml(meta.btnLabel)}</span>
+          </button>
+        </div>
+        <div class="note-card-body">
+          <pre class="note-card-pre">${escapeHtml(note)}</pre>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderReport(report) {
   // 单曲链接的报告结构与专辑报告几乎不重叠，走独立渲染
   if (report.report_type === "song") {
@@ -591,7 +674,7 @@ function renderReport(report) {
   // 封面 Edit note 草稿：原本挂在 11「Edit note 草稿」里，和封面/来源隔了半页；
   // 搬进本卡、紧贴来源列表，写封面说明时不用来回滚。
   const coverNote = (report.edit_notes || {}).cover || "";
-  $("#cover-note").innerHTML = coverNote ? `<div class="note-block"><div class="note-head"><span>cover</span><button class="copy-note" data-note="${escapeHtml(coverNote)}">复制</button></div><pre>${escapeHtml(coverNote)}</pre></div>` : "";
+  $("#cover-note").innerHTML = coverNote ? renderEditNotes({ cover: coverNote }, false) : "";
 
   $("#source-comparison").innerHTML = (report.source_comparison || []).map((row) => `<div class="comparison-row ${escapeHtml(row.status)}"><div class="comparison-field">${escapeHtml(row.field)}</div><div class="comparison-status ${escapeHtml(row.status)}">${row.status === "match" ? "一致" : row.status === "conflict" ? "冲突" : "缺失"}</div><div class="comparison-values">${row.values.length ? row.values.map((item) => `<div><span>${escapeHtml(item.source)}：</span><strong>${escapeHtml(display(item.value))}</strong></div>`).join("") : `<span>${escapeHtml(row.note)}</span>`}</div></div>`).join("") || `<div class="empty">没有足够的来源用于对比。</div>`;
 
@@ -650,7 +733,7 @@ function renderReport(report) {
   $("#tracks").innerHTML = tracks.length ? tracks.map((track, index) => `<tr><td>${escapeHtml(trackNumberLabel(track, index, multiDisc))}</td><td><strong>${escapeHtml(track.title)}</strong></td><td>${escapeHtml(track.artist || "跟随发行艺人")}</td><td>${escapeHtml(track.length || "未确认")}</td><td>${track.isrc ? `<code class="copyable-code" data-copy="${escapeHtml(track.isrc)}" title="点击复制 ISRC">${escapeHtml(track.isrc)}</code>` : `<span class="empty">未确认</span>`}</td><td>${track.recording_mbid ? `<a href="https://musicbrainz.org/recording/${escapeHtml(track.recording_mbid)}" target="_blank" rel="noreferrer">${escapeHtml(track.recording_mbid.slice(0, 8))}…</a>` : `<span class="empty">新建 / 待确认</span>`}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">没有找到曲目表，请提供更具体的发行链接。</td></tr>`;
 
   renderChecklist("checklist", report.manual_review || [], checklistKey(report));
-  $("#edit-notes").innerHTML = Object.entries(report.edit_notes).filter(([name]) => name !== "cover").map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
+  $("#edit-notes").innerHTML = renderEditNotes(report.edit_notes || {});
   const workRels = report.work_relations || { status: "skipped", notice: "", items: [], work_count: 0, relation_count: 0 };
   const wrCount = $("#work-relations-count");
   if (wrCount) {
@@ -780,7 +863,7 @@ function renderSongReport(report) {
 
   // S8 Edit note 草稿
   const notes = report.edit_notes || {};
-  $("#song-edit-notes").innerHTML = Object.entries(notes).map(([name, note]) => `<div class="note-block"><div class="note-head"><span>${escapeHtml(name)}</span><button class="copy-note" data-note="${escapeHtml(note)}">复制</button></div><pre>${escapeHtml(note)}</pre></div>`).join("");
+  $("#song-edit-notes").innerHTML = renderEditNotes(notes);
 
   // S9 诊断
   const songDiagItems = [];
@@ -1643,7 +1726,7 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("click", async (event) => {
   const button = event.target.closest(".copy-note");
   if (!button) return;
-  await copyText(button.dataset.note || "", button, "复制");
+  await copyText(button.dataset.note || "", button, button.dataset.label || "Edit Note 草稿");
 });
 
 // 核对清单勾选：更新待勾计数 + 左栏进度条，并落 sessionStorage。
