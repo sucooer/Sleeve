@@ -653,8 +653,14 @@ function renderReport(report) {
   $("#staging-empty")?.classList.add("hidden");
   $("#song-results").classList.add("hidden");
   $("#results").classList.remove("hidden");
+  const confTextMap = {
+    high: "高置信度 (High)",
+    medium: "中置信度 (Medium)",
+    low: "需人工核对 (Low)"
+  };
+  const confLabel = confTextMap[(report.confidence || {}).overall] || (report.confidence || {}).overall || "置信度评估中";
   $("#report-title").textContent = report.release.title || "建库资料";
-  $("#report-subtitle").textContent = `${report.release.artist || "未知艺人"} · ${report.release.date || "日期待确认"} · ${report.confidence.overall} confidence`;
+  $("#report-subtitle").textContent = `${report.release.artist || "未知艺人"} · ${report.release.date || "日期待确认"} · ${confLabel}`;
 
   const mbAddBtn = $("#open-mb-add");
   if (mbAddBtn) {
@@ -680,10 +686,11 @@ function renderReport(report) {
   if (!report.release.catalog_number) warnFields.add("Catalog number");
   $("#release-fields").innerHTML = fields.map(([key, value]) => {
     const disp = display(value);
-    const copyable = disp !== "未确认";
-    return `<div class="field ${warnFields.has(key) ? "warn" : ""} ${copyable ? "copyable" : ""}" ${copyable ? `data-copy-key="${escapeHtml(key)}" data-copy-val="${escapeHtml(value)}" title="点击复制 ${escapeHtml(key)}"` : ""}>
+    const isUnconfirmed = disp === "未确认";
+    const copyable = !isUnconfirmed;
+    return `<div class="field ${warnFields.has(key) ? "warn" : ""} ${copyable ? "copyable" : "unconfirmed"}" ${copyable ? `data-copy-key="${escapeHtml(key)}" data-copy-val="${escapeHtml(value)}" title="点击复制 ${escapeHtml(key)}"` : ""}>
       <div class="key"><span>${escapeHtml(key)}</span>${copyable ? `<span class="field-copy-hint">复制</span>` : ""}</div>
-      <div class="value">${escapeHtml(disp)}</div>
+      <div class="value ${isUnconfirmed ? "val-unconfirmed" : ""}">${escapeHtml(disp)}</div>
     </div>`;
   }).join("");
 
@@ -733,7 +740,51 @@ function renderReport(report) {
   const externalLinks = report.external_links || [];
   $("#external-count").textContent = `${externalLinks.length} 条`;
   const platformSearch = report.external_platform_search || [];
-  $("#external-links").innerHTML = (externalLinks.length ? `<table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${externalLinks.map((item) => `<tr><td>${escapeHtml(item.site)}</td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table><p class="muted">关系类型照抄；「自动发现」的链接添加前请核对。</p>` : `<div class="empty">还没有可用的外部链接。</div>`) + (platformSearch.length ? `<div class="lookup-hint">下面这些平台还没拿到链接，点开搜索页找到后把 URL 贴回输入框即可自动归类。${report.external_platform_search_note ? escapeHtml(report.external_platform_search_note) : ""}</div><div class="lookup-actions">${platformSearch.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.name)} 搜索</a>`).join("")}</div>` : "");
+  const tableHtml = externalLinks.length ? `
+    <div class="table-wrap">
+      <table class="external-table">
+        <thead>
+          <tr>
+            <th>站点</th>
+            <th>MusicBrainz 关系类型</th>
+            <th>链接</th>
+            <th>来源</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${externalLinks.map((item) => `
+            <tr>
+              <td><strong>${escapeHtml(item.site)}</strong></td>
+              <td><code>${escapeHtml(item.relationship)}</code></td>
+              <td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td>
+              <td class="muted">${escapeHtml(item.source)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted font-xs">关系类型照抄；标注「自动发现」的链接是按条码或标题检索到的候选，添加前请核对。</p>
+  ` : `<div class="empty">还没有可用的外部链接。</div>`;
+
+  const searchBoxHtml = platformSearch.length ? `
+    <div class="sub-helper-card">
+      <div class="helper-card-head">
+        <span class="helper-badge">🔍 平台外链补充</span>
+        <span class="muted font-xs">点击打开搜索页，找到后把 URL 贴回输入框即可自动归类</span>
+      </div>
+      <div class="lookup-actions">
+        ${platformSearch.map((item) => `
+          <a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">
+            <span>${escapeHtml(item.name)} 搜索</span>
+            <span class="link-arrow">↗</span>
+          </a>
+        `).join("")}
+      </div>
+      ${report.external_platform_search_note ? `<p class="muted font-xs helper-note">${escapeHtml(report.external_platform_search_note)}</p>` : ""}
+    </div>
+  ` : "";
+
+  $("#external-links").innerHTML = tableHtml + searchBoxHtml;
 
   const candidates = report.catalog_candidates || [];
   // 手工品番是模块级状态，会跟着之后的每一次查询（后端拿非空的手工值覆盖自动抓到的品番）。
@@ -755,7 +806,22 @@ function renderReport(report) {
   $("#catalog-candidates").innerHTML = catalogBlocks.join("");
 
   const links = report.lookup_links || [];
-  $("#lookup-links").innerHTML = links.length ? `<div class="lookup-hint">没找到品番时，用下面的入口核对：站内搜索最直接；若商店返回 403（OTOTOY 的搜索页会拦脚本流量），改用 Google 站内搜索。找到专辑后把商店链接贴回上方即可自动取品番。</div><div class="lookup-actions">${links.map((item) => `<a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">${escapeHtml(item.name)}</a>`).join("")}</div>` : "";
+  $("#lookup-links").innerHTML = links.length ? `
+    <div class="sub-helper-card lookup-guide-card">
+      <div class="helper-card-head">
+        <span class="helper-badge">📦 品番外部核验渠道</span>
+        <span class="muted font-xs">若商店返回 403，改用 Google 站内搜索；找到后把链接贴回输入框即可自动取品番</span>
+      </div>
+      <div class="lookup-actions">
+        ${links.map((item) => `
+          <a class="lookup-link" href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer" title="${escapeHtml(item.url)}">
+            <span>${escapeHtml(item.name)}</span>
+            <span class="link-arrow">↗</span>
+          </a>
+        `).join("")}
+      </div>
+    </div>
+  ` : "";
 
   // 查重：MusicBrainz 查重告警已移至右栏 MB RADAR 统一高亮展示
   // 此处保留 duplicates DOM 节点仅供测试与兼容性读取，左侧卡片保持 hidden
@@ -873,10 +939,11 @@ function renderSongReport(report) {
   ];
   $("#song-fields").innerHTML = fields.map(([key, value]) => {
     const disp = display(value);
-    const copyable = disp !== "未确认";
-    return `<div class="field ${copyable ? "copyable" : ""}" ${copyable ? `data-copy-key="${escapeHtml(key)}" data-copy-val="${escapeHtml(value)}" title="点击复制 ${escapeHtml(key)}"` : ""}>
+    const isUnconfirmed = disp === "未确认";
+    const copyable = !isUnconfirmed;
+    return `<div class="field ${copyable ? "copyable" : "unconfirmed"}" ${copyable ? `data-copy-key="${escapeHtml(key)}" data-copy-val="${escapeHtml(value)}" title="点击复制 ${escapeHtml(key)}"` : ""}>
       <div class="key"><span>${escapeHtml(key)}</span>${copyable ? `<span class="field-copy-hint">复制</span>` : ""}</div>
-      <div class="value">${escapeHtml(disp)}</div>
+      <div class="value ${isUnconfirmed ? "val-unconfirmed" : ""}">${escapeHtml(disp)}</div>
     </div>`;
   }).join("");
 
@@ -913,7 +980,7 @@ function renderSongReport(report) {
   const ext = report.external_links || [];
   const extCount = $("#song-external-count");
   if (extCount) extCount.textContent = `${ext.length} 条`;
-  $("#song-external-links").innerHTML = ext.length ? `<table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${ext.map((item) => `<tr><td>${escapeHtml(item.site)}</td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">还没有可用的外部链接。</div>`;
+  $("#song-external-links").innerHTML = ext.length ? `<div class="table-wrap"><table class="external-table"><thead><tr><th>站点</th><th>MusicBrainz 关系类型</th><th>链接</th><th>来源</th></tr></thead><tbody>${ext.map((item) => `<tr><td><strong>${escapeHtml(item.site)}</strong></td><td><code>${escapeHtml(item.relationship)}</code></td><td><a href="${escapeHtml(safeHref(item.url))}" target="_blank" rel="noreferrer">${escapeHtml(item.url)}</a></td><td class="muted">${escapeHtml(item.source)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">还没有可用的外部链接。</div>`;
 
   // S7 核对清单
   const items = report.manual_review || [];
