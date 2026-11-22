@@ -187,11 +187,22 @@ function triggerStaggerEntrance(container) {
   if (!container) return;
   container.classList.remove("is-revealing");
   void container.offsetWidth;
-  const items = container.querySelectorAll(".reportbar, .phase, .card, .panel-section");
+  const items = container.querySelectorAll(".dossier-hero, .staging-tabs-nav, .field, .note-card, .radar-card, .cover-card, .source, .comparison-row, .card");
   items.forEach((item, idx) => {
-    item.style.setProperty("--stagger-idx", String(Math.min(idx, 16)));
+    item.style.setProperty("--stagger-idx", String(Math.min(idx, 20)));
   });
   container.classList.add("is-revealing");
+}
+
+function flashShimmerSweep(fieldKey) {
+  if (!fieldKey) return;
+  const targetField = document.querySelector(`.field[data-copy-key="${fieldKey}"]`);
+  if (targetField) {
+    targetField.classList.remove("shimmer-sweep");
+    void targetField.offsetWidth;
+    targetField.classList.add("shimmer-sweep");
+    setTimeout(() => targetField.classList.remove("shimmer-sweep"), 850);
+  }
 }
 
 // ---------- MusicBrainz 匹配与查重雷达 ----------
@@ -429,7 +440,15 @@ function initStageTabs() {
         audit: $("#stage-pane-audit")
       };
       Object.entries(panes).forEach(([key, pane]) => {
-        if (pane) pane.classList.toggle("hidden", key !== stage);
+        if (pane) {
+          const isCurrent = key === stage;
+          pane.classList.toggle("hidden", !isCurrent);
+          if (isCurrent) {
+            pane.style.animation = "none";
+            void pane.offsetWidth;
+            pane.style.animation = "";
+          }
+        }
       });
     });
   }
@@ -1678,6 +1697,7 @@ document.addEventListener("click", async (event) => {
       currentReport.release[prop] = val;
       renderReport(currentReport);
       flashCopied(conflictBtn);
+      flashShimmerSweep(field);
       showToast(`已将 ${field} 采纳为：${val}（来自 ${source}）`);
     }
     return;
@@ -1696,7 +1716,15 @@ document.addEventListener("click", async (event) => {
       artist: $("#tab-pane-artist")
     };
     Object.entries(panes).forEach(([key, pane]) => {
-      if (pane) pane.classList.toggle("hidden", key !== tab);
+      if (pane) {
+        const isCurrent = key === tab;
+        pane.classList.toggle("hidden", !isCurrent);
+        if (isCurrent) {
+          pane.style.animation = "none";
+          void pane.offsetWidth;
+          pane.style.animation = "";
+        }
+      }
     });
     return;
   }
