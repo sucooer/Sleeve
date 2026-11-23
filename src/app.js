@@ -653,6 +653,7 @@ function renderReport(report) {
   $("#staging-empty")?.classList.add("hidden");
   $("#song-results").classList.add("hidden");
   $("#results").classList.remove("hidden");
+  document.body.classList.add("has-results");
   const confTextMap = {
     high: "高置信度 (High)",
     medium: "中置信度 (Medium)",
@@ -919,6 +920,7 @@ function renderSongReport(report) {
   $("#results").classList.add("hidden");
   const box = $("#song-results");
   box.classList.remove("hidden");
+  document.body.classList.add("has-results");
   triggerStaggerEntrance(box);
   $("#song-report-title").textContent = s.title || "单曲资料";
   const albumPart = s.album ? `《${s.album}》` : "所属专辑未确认";
@@ -1369,7 +1371,7 @@ async function runLookup() {
   const skeleton = $("#lookup-skeleton");
 
   if (!urls.length) {
-    status.className = "status error";
+    status.className = "status-indicator error";
     status.textContent = "请粘贴至少一个来源链接";
     if (textarea) {
       textarea.classList.remove("shake-error");
@@ -1381,7 +1383,7 @@ async function runLookup() {
     showToast("请粘贴至少一个来源链接", "error");
     return;
   }
-  status.className = "status";
+  status.className = "status-indicator";
   // 查询要走好几家外部服务，慢的时候十几秒。把已等待时间显出来，别让人以为卡死了。
   const startedAt = Date.now();
   const workingText = "正在查询输入链接、Apple/iTunes、Spotify 和 MusicBrainz…";
@@ -1402,7 +1404,7 @@ async function runLookup() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "查询失败");
     if (data.needs_selection) {
-      status.className = "status error";
+      status.className = "status-indicator error";
       status.textContent = data.reason || "无法解析该链接，请换一个站点链接再试";
       return;
     }
@@ -1416,10 +1418,10 @@ async function runLookup() {
       if (manualCatalog) params.set("catalog", manualCatalog);
       history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
     } catch (error) { /* file:// 等环境不允许改地址栏时忽略 */ }
-    status.className = "status ok";
+    status.className = "status-indicator ok";
     status.textContent = "资料已生成，请逐项核对";
   } catch (error) {
-    status.className = "status error";
+    status.className = "status-indicator error";
     status.textContent = error.message;
     showToast(error.message, "error");
   } finally {
@@ -1483,7 +1485,7 @@ $("#btn-clear-urls")?.addEventListener("click", () => {
     input.focus();
     const status = $("#status");
     if (status) {
-      status.className = "status";
+      status.className = "status-indicator";
       status.textContent = "等待输入";
     }
     showToast("已清空输入框");
@@ -1969,8 +1971,21 @@ $(".brand").addEventListener("click", () => {
   $("#results")?.classList.add("hidden");
   $("#song-results")?.classList.add("hidden");
   $("#staging-empty")?.classList.remove("hidden");
+  document.body.classList.remove("has-results");
   currentReport = null;
   try { history.replaceState(null, "", location.pathname); } catch (error) { /* ignore */ }
+  const sourceInput = $("#source-urls");
+  if (sourceInput) sourceInput.value = "";
+  const status = $("#status");
+  if (status) {
+    status.className = "status-indicator";
+    status.textContent = "等待输入";
+  }
+  const sourcesEl = $("#sources");
+  if (sourcesEl) sourcesEl.innerHTML = '<div class="empty-hint">暂无已抓取的数据源。</div>';
+  const coverSourcesEl = $("#cover-sources");
+  if (coverSourcesEl) coverSourcesEl.innerHTML = "";
+  $("#lookup-skeleton")?.classList.add("hidden");
   showToast("已重置工作台并返回首页");
 });
 
